@@ -1,0 +1,13 @@
+# Python 3.13 dependencies for Windows with an NVIDIA CUDA 12.4-compatible driver.
+# The extra index supplies the CUDA-enabled PyTorch wheel.
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+typing-extensions>=4.12
+PyYAML>=6.0
+numpy>=2.1
+scikit-learn>=1.6
+networkx>=3.4
+pandas>=2.2
+matplotlib>=3.9
+tqdm>=4.67
+# Install RDKit for CCI preprocessing with: conda install -c conda-forge rdkit

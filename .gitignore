@@ -1,0 +1,42 @@
+# Virtual environments
+.venv/
+.venv*/
+venv/
+env/
+
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local temporary files
+.codex-tmp/
+*.tmp
+*.log
+
+# Datasets, generated bundles, and experiment artifacts
+data/raw/
+data/processed/
+outputs/
+*.ckpt
+*.pth
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Link the paper from README instead of redistributing it
+GRAND.pdf

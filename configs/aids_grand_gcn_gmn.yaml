@@ -1,0 +1,37 @@
+experiment:
+  name: aids_grand_gcn_gmn
+  seed: 42
+  mode: grand
+data:
+  path: data/processed/aids700nef.pt
+evaluation:
+  mode: ebp
+  recall_k: 5
+  ndcg_k: 5
+model:
+  student: gcn
+  teacher: gmn
+  input_dim: 29
+  hidden_dim: 128
+  layers: 3
+  dropout: 0.0
+  graphsim_cnn_layers: 5
+  graphsim_mlp_layers: 5
+training:
+  device: cuda
+  batch_size: 32
+  learning_rate: 0.001
+  iterations: 30000
+  validation_interval: 500
+  early_stopping_patience: 10
+distillation:
+  alpha: 0.5
+  score: true
+  node: true
+  subgraph: true
+  bidirectional: true
+  beta: 0.1
+  gamma: 0.1
+  temperature: 2.0
+  node_temperature: 2.0
+  subgraph_temperature: 2.0

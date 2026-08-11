@@ -1,0 +1,26 @@
+experiment:
+  name: aids_gmn_mbp
+  seed: 42
+  mode: baseline
+data:
+  path: data/processed/aids700nef.pt
+evaluation:
+  mode: mbp
+  recall_k: 5
+  ndcg_k: 5
+model:
+  student: gmn
+  teacher: gmn
+  input_dim: 29
+  hidden_dim: 128
+  layers: 3
+  dropout: 0.0
+  graphsim_cnn_layers: 5
+  graphsim_mlp_layers: 5
+training:
+  device: cuda
+  batch_size: 32
+  learning_rate: 0.001
+  iterations: 30000
+  validation_interval: 500
+  early_stopping_patience: 10
