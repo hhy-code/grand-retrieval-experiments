@@ -47,6 +47,8 @@ class GCNEncoder(nn.Module):
 
 GEM_DEFAULTS = {
     "node_state_dim": 32,
+    "edge_feature_dim": 3,
+    "edge_state_dim": 16,
     "message_hidden_dim": 64,
     "propagation_steps": 5,
     "graph_rep_dim": 128,
@@ -62,60 +64,114 @@ def _gem_config(values):
     return config
 
 
-def _undirected_edges(edge_index):
-    """Match GEM's reverse-direction propagation for an undirected AIDS graph."""
+def _undirected_edges(edge_index, edge_features):
+    """Collapse stored bidirectional edges before GEM propagates both ways."""
     if not edge_index.numel():
-        return edge_index
+        return edge_index, edge_features
     source, target = edge_index
     pairs = torch.stack((torch.minimum(source, target), torch.maximum(source, target)), dim=1)
-    return torch.unique(pairs, dim=0).t().contiguous()
+    pairs, inverse = torch.unique(pairs, dim=0, return_inverse=True)
+    merged_features = edge_features.new_zeros((pairs.shape[0], edge_features.shape[1]))
+    merged_features.index_add_(0, inverse, edge_features)
+    counts = edge_features.new_zeros(pairs.shape[0])
+    counts.index_add_(0, inverse, torch.ones_like(inverse, dtype=edge_features.dtype))
+    merged_features = merged_features / counts.clamp_min(1).unsqueeze(-1)
+    return pairs.t().contiguous(), merged_features
+
+
+class GEMFeatureEncoder(nn.Module):
+    """Project raw node and edge features to GEM's recommended state sizes."""
+
+    def __init__(self, node_feature_dim, edge_feature_dim, node_state_dim, edge_state_dim):
+        super().__init__()
+        self.node = nn.Linear(node_feature_dim, node_state_dim)
+        self.edge = nn.Linear(edge_feature_dim, edge_state_dim)
+
+    def forward(self, node_features, edge_features):
+        return self.node(node_features), self.edge(edge_features)
 
 
 class GEMPropagation(nn.Module):
-    """One shared GEM propagation layer based on Graph Matching Networks."""
+    """One shared, bidirectional GEM propagation layer."""
 
-    def __init__(self, node_state_dim, message_hidden_dim):
+    def __init__(self, node_state_dim, edge_state_dim, message_hidden_dim):
         super().__init__()
+        message_dim = node_state_dim * 2
         self.message = nn.Sequential(
-            nn.Linear(node_state_dim * 2, message_hidden_dim),
+            nn.Linear(node_state_dim * 2 + edge_state_dim, message_hidden_dim),
             nn.ReLU(),
-            nn.Linear(message_hidden_dim, message_hidden_dim),
+            nn.Linear(message_hidden_dim, message_dim),
         )
-        self.update = nn.GRUCell(message_hidden_dim, node_state_dim)
+        self.update = nn.GRUCell(message_dim, node_state_dim)
 
-    def forward(self, nodes, edge_index):
+    def forward(self, nodes, edge_index, edge_features):
         messages = nodes.new_zeros((nodes.shape[0], self.update.input_size))
         if edge_index.numel():
             source, target = edge_index
-            messages.index_add_(0, target, self.message(torch.cat((nodes[source], nodes[target]), dim=-1)))
-            messages.index_add_(0, source, self.message(torch.cat((nodes[target], nodes[source]), dim=-1)))
+            forward_inputs = torch.cat((nodes[source], nodes[target], edge_features), dim=-1)
+            reverse_inputs = torch.cat((nodes[target], nodes[source], edge_features), dim=-1)
+            messages.index_add_(0, target, self.message(forward_inputs))
+            messages.index_add_(0, source, self.message(reverse_inputs))
         return self.update(messages, nodes)
 
 
+class GEMGraphAggregator(nn.Module):
+    """Gated MLP, sum pooling, and graph MLP from the GEM architecture."""
+
+    def __init__(self, node_state_dim, graph_rep_dim):
+        super().__init__()
+        self.graph_rep_dim = graph_rep_dim
+        self.gated_node_transform = nn.Linear(node_state_dim, graph_rep_dim * 2)
+        self.graph_transform = nn.Linear(graph_rep_dim, graph_rep_dim)
+
+    def forward(self, nodes):
+        gates, values = self.gated_node_transform(nodes).chunk(2, dim=-1)
+        return self.graph_transform((torch.sigmoid(gates) * values).sum(dim=0))
+
+
 class GEMEncoder(nn.Module):
-    """GEM node encoder with gated-sum graph aggregation."""
+    """GEM graph embedding network adapted from the reference implementation."""
 
     def __init__(self, input_dim, gem_config=None, dropout=0.0):
         super().__init__()
         config = _gem_config(gem_config)
         self.node_state_dim = config["node_state_dim"]
+        self.edge_feature_dim = config["edge_feature_dim"]
         self.propagation_steps = config["propagation_steps"]
-        self.input = nn.Linear(input_dim, self.node_state_dim)
-        self.propagation = GEMPropagation(self.node_state_dim, config["message_hidden_dim"])
-        self.gated_sum = nn.Linear(self.node_state_dim, config["graph_rep_dim"] * 2)
-        self.graph_transform = nn.Linear(config["graph_rep_dim"], config["graph_rep_dim"])
+        self.feature_encoder = GEMFeatureEncoder(
+            input_dim,
+            self.edge_feature_dim,
+            self.node_state_dim,
+            config["edge_state_dim"],
+        )
+        self.propagation = GEMPropagation(
+            self.node_state_dim,
+            config["edge_state_dim"],
+            config["message_hidden_dim"],
+        )
+        self.aggregator = GEMGraphAggregator(self.node_state_dim, config["graph_rep_dim"])
         self.dropout = dropout
 
     def forward(self, graph):
-        nodes = self.input(graph["x"])
-        edge_index = _undirected_edges(graph["edge_index"])
+        edge_features = graph.get("edge_attr")
+        if edge_features is None:
+            raise ValueError("GEM requires edge_attr; rebuild the AIDS bundle with scripts/prepare_aids.py")
+        if (
+            edge_features.ndim != 2
+            or edge_features.shape[0] != graph["edge_index"].shape[1]
+            or edge_features.shape[1] != self.edge_feature_dim
+        ):
+            raise ValueError(
+                "GEM expected edge_attr with shape [{}, {}], got {}".format(
+                    graph["edge_index"].shape[1], self.edge_feature_dim, tuple(edge_features.shape)
+                )
+            )
+        edge_index, edge_features = _undirected_edges(graph["edge_index"], edge_features)
+        nodes, edge_features = self.feature_encoder(graph["x"], edge_features)
         for _ in range(self.propagation_steps):
-            nodes = self.propagation(nodes, edge_index)
+            nodes = self.propagation(nodes, edge_index, edge_features)
             nodes = F.dropout(nodes, self.dropout, self.training)
-        pooled = self.gated_sum(nodes)
-        gates, values = pooled.chunk(2, dim=-1)
-        embedding = self.graph_transform((torch.sigmoid(gates) * values).sum(dim=0))
-        return nodes, embedding
+        return nodes, self.aggregator(nodes)
 
 
 class Ebp(nn.Module):
@@ -126,14 +182,18 @@ class Ebp(nn.Module):
         self.encoder = encoder
 
     def encode(self, graph):
-        nodes, embedding = self.encoder(graph)
-        return nodes, F.normalize(embedding, dim=0)
+        return self.encoder(graph)
+
+    @staticmethod
+    def score_embeddings(left_embedding, right_embedding):
+        """GRAND Eq. 5: negative squared Euclidean distance."""
+        return -torch.sum((left_embedding - right_embedding) ** 2, dim=-1)
 
     def score_pair(self, left, right):
         left_nodes, left_embedding = self.encode(left)
         right_nodes, right_embedding = self.encode(right)
-        return (left_embedding * right_embedding).sum(), (left_nodes, right_nodes)
-
+        return self.score_embeddings(left_embedding, right_embedding), (left_nodes, right_nodes)
+"""  """
 
 class GMN(nn.Module):
     """Pair-specific matching network with cross-graph attention at each layer."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,12 @@ from grand.subgraphs import fluidc_partition
 
 
 def move(graph, device):
-    moved = {"id": graph["id"], "x": graph["x"].to(device), "edge_index": graph["edge_index"].to(device)}
+    moved = {
+        "id": graph["id"],
+        "x": graph["x"].to(device),
+        "edge_index": graph["edge_index"].to(device),
+        "edge_attr": graph["edge_attr"].to(device),
+    }
     if "subgraph_groups" in graph:
         moved["subgraph_groups"] = [group.to(device) for group in graph["subgraph_groups"]]
     return moved
@@ -87,6 +93,14 @@ def baseline_loss(model, graphs, triples, device):
 def train_baseline(model, graphs, bundle, device, train, seed, output):
     """Train one Ebp/Mbp baseline with the paper's ranking objective."""
     optimizer = torch.optim.Adam(model.parameters(), lr=train["learning_rate"])
+    validation_triples = list(
+        sample_triplets(
+            bundle,
+            "val",
+            train.get("validation_samples", 320),
+            random.Random(train.get("validation_seed", seed + 900000)),
+        )
+    )
     best, stale, history = float("inf"), 0, []
     bar = tqdm(range(1, train["iterations"] + 1), desc="Baseline training", unit="iter")
     for iteration in bar:
@@ -99,7 +113,7 @@ def train_baseline(model, graphs, bundle, device, train, seed, output):
         bar.set_postfix(train="{:.4f}".format(loss.item()))
         if iteration % train["validation_interval"] != 0:
             continue
-        value = validate(model, graphs, bundle, device, seed + iteration)
+        value = validate(model, graphs, validation_triples, device)
         history.append({"iteration": iteration, "train_loss": loss.item(), "validation_loss": value})
         bar.set_postfix(train="{:.4f}".format(loss.item()), validation="{:.4f}".format(value))
         if value < best:
@@ -116,16 +130,22 @@ def train_baseline(model, graphs, bundle, device, train, seed, output):
     print("Training finished. Best baseline checkpoint: {}".format(output / "student_best.pt"))
 
 
-def validate(model, graphs, bundle, device, seed, count=320):
+def validate(model, graphs, triples, device):
     model.eval()
     with torch.no_grad():
-        triples = list(sample_triplets(bundle, "val", count, random.Random(seed)))
         return baseline_loss(model, graphs, triples, device).item()
+
+
+def default_output_dir(experiment_name):
+    """Return a unique default output path for direct trainer invocations."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return Path("outputs") / "{}_{}".format(experiment_name, timestamp)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--output", help="Run directory; defaults to a timestamped path under outputs/")
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     seed = int(config["experiment"]["seed"])
@@ -142,9 +162,14 @@ def main():
     model = config["model"]
     gem_config = model.get("gem")
     student = build_model(model["student"], model["input_dim"], model["hidden_dim"], model["layers"], model["dropout"], model["graphsim_cnn_layers"], model["graphsim_mlp_layers"], gem_config).to(device)
-    output = Path("outputs") / config["experiment"]["name"]
+    output = Path(args.output) if args.output else default_output_dir(config["experiment"]["name"])
     output.mkdir(parents=True, exist_ok=True)
     (output / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
+    (output / "run.json").write_text(
+        json.dumps({"output": str(output), "started_at": datetime.now().isoformat(timespec="seconds")}, indent=2),
+        encoding="utf-8",
+    )
+    print("Run output: {}".format(output), flush=True)
     train = config["training"]
     if config["experiment"].get("mode", "grand") == "baseline":
         train_baseline(student, graphs, bundle, device, train, seed, output)
@@ -161,6 +186,14 @@ def main():
         teacher.eval()
 
     best, stale, history = float("inf"), 0, []
+    validation_triples = list(
+        sample_triplets(
+            bundle,
+            "val",
+            train.get("validation_samples", 320),
+            random.Random(train.get("validation_seed", seed + 900000)),
+        )
+    )
     student_bar = tqdm(range(1, train["iterations"] + 1), desc="Mutual KD", unit="iter")
     for iteration in student_bar:
         student.train()
@@ -178,7 +211,7 @@ def main():
         student_bar.set_postfix(train="{:.4f}".format(loss.item()))
         if iteration % train["validation_interval"] != 0:
             continue
-        value = validate(student, graphs, bundle, device, seed + iteration)
+        value = validate(student, graphs, validation_triples, device)
         history.append({"iteration": iteration, "train_loss": loss.item(), "validation_loss": value})
         student_bar.set_postfix(train="{:.4f}".format(loss.item()), validation="{:.4f}".format(value))
         if value < best:

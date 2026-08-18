@@ -53,12 +53,19 @@ def graph_tensor(graph, atom_types):
         if atom_type not in atom_types:
             raise ValueError("Unexpected AIDS atom type: {!r}".format(atom_type))
         features[index, atom_types[atom_type]] = 1.0
-    edges = []
-    for source, target in graph.edges():
+    edges, edge_features = [], []
+    for source, target, attributes in graph.edges(data=True):
         left, right = position[source], position[target]
+        valence = int(attributes.get("valence", 0))
+        if valence not in (1, 2, 3):
+            raise ValueError("Unexpected AIDS edge valence: {!r}".format(valence))
+        encoded_valence = [0.0, 0.0, 0.0]
+        encoded_valence[valence - 1] = 1.0
         edges.extend(((left, right), (right, left)))
+        edge_features.extend((encoded_valence, encoded_valence))
     edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous() if edges else torch.empty((2, 0), dtype=torch.long)
-    return features, edge_index
+    edge_attr = torch.tensor(edge_features, dtype=torch.float32) if edge_features else torch.empty((0, 3), dtype=torch.float32)
+    return features, edge_index, edge_attr
 
 
 def distance_map(path):
@@ -110,9 +117,9 @@ def main():
     positives.update(build_positives(distances, test_ids, candidate_test))
     graphs = []
     for identifier, _, graph in records:
-        features, edge_index = graph_tensor(graph, atom_types)
-        graphs.append({"id": identifier, "x": features, "edge_index": edge_index})
-    bundle = {"graphs": graphs, "splits": {"train": train_ids, "val": val_ids, "test": test_ids}, "candidates": {"train": candidate_train, "val": candidate_train, "test": candidate_test}, "positives": positives, "metadata": {"dataset": "AIDS700nef", "feature_dim": 29, "atom_type_mapping": atom_types, "relevance_definition": "all candidates with minimum A* GED to each query", "split_protocol": "GraphSim sorted 75/25 train/validation; test queries retrieve from all 560 original train graphs", "source": "GraphSim AIDS700nef + A* GED pickle"}}
+        features, edge_index, edge_attr = graph_tensor(graph, atom_types)
+        graphs.append({"id": identifier, "x": features, "edge_index": edge_index, "edge_attr": edge_attr})
+    bundle = {"graphs": graphs, "splits": {"train": train_ids, "val": val_ids, "test": test_ids}, "candidates": {"train": candidate_train, "val": candidate_train, "test": candidate_test}, "positives": positives, "metadata": {"dataset": "AIDS700nef", "feature_dim": 29, "edge_feature_dim": 3, "atom_type_mapping": atom_types, "edge_valence_mapping": {1: 0, 2: 1, 3: 2}, "relevance_definition": "all candidates with minimum A* GED to each query", "split_protocol": "GraphSim sorted 75/25 train/validation; test queries retrieve from all 560 original train graphs", "source": "GraphSim AIDS700nef + A* GED pickle"}}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(bundle, output)

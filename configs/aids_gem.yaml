@@ -19,6 +19,8 @@ model:
   graphsim_mlp_layers: 5
   gem:
     node_state_dim: 32
+    edge_feature_dim: 3
+    edge_state_dim: 16
     message_hidden_dim: 64
     propagation_steps: 5
     graph_rep_dim: 128
@@ -28,4 +30,6 @@ training:
   learning_rate: 0.001
   iterations: 30000
   validation_interval: 500
+  validation_samples: 320
+  validation_seed: 900042
   early_stopping_patience: 10

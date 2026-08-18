@@ -23,6 +23,8 @@ training:
   learning_rate: 0.001
   iterations: 30000
   validation_interval: 500
+  validation_samples: 320
+  validation_seed: 900042
   early_stopping_patience: 10
 distillation:
   alpha: 0.5

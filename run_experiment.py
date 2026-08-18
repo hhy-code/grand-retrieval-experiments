@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -31,6 +32,12 @@ def run(command):
     subprocess.run(command, check=True)
 
 
+def run_output_dir(experiment_name):
+    """Return a unique, timestamped directory for one experiment invocation."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return Path("outputs") / "{}_{}".format(experiment_name, timestamp)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train then evaluate a dataset experiment")
     parser.add_argument("method", nargs="?", help="Method: GCN, GEM, GMN, GraphSim, or an explicit GRAND pair")
@@ -43,10 +50,11 @@ def main():
     if not config_path.is_file():
         raise SystemExit("Configuration not found: {}".format(config_path))
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    output = Path("outputs") / config["experiment"]["name"]
+    output = run_output_dir(config["experiment"]["name"])
     checkpoint = output / "student_best.pt"
+    print("Run output: {}".format(output), flush=True)
     try:
-        run([sys.executable, "train_paper_aids.py", "--config", str(config_path)])
+        run([sys.executable, "train_paper_aids.py", "--config", str(config_path), "--output", str(output)])
     except subprocess.CalledProcessError as error:
         raise SystemExit("Training stopped or failed (exit code {}). Final evaluation was not started.".format(error.returncode))
     if not checkpoint.is_file():

@@ -15,7 +15,12 @@ from grand.models import build_model
 
 
 def move(graph, device):
-    return {"id": graph["id"], "x": graph["x"].to(device), "edge_index": graph["edge_index"].to(device)}
+    return {
+        "id": graph["id"],
+        "x": graph["x"].to(device),
+        "edge_index": graph["edge_index"].to(device),
+        "edge_attr": graph["edge_attr"].to(device),
+    }
 
 
 def main():
@@ -43,7 +48,8 @@ def main():
             for query in queries:
                 started = time.perf_counter()
                 _, vector = model.encode(move(graphs[query], device))
-                order = torch.argsort(vectors @ vector, descending=True).tolist()
+                scores = model.score_embeddings(vectors, vector)
+                order = torch.argsort(scores, descending=True).tolist()
                 rankings.append([candidates[index] for index in order if candidates[index] != query])
                 times.append((time.perf_counter() - started) * 1000)
         else:

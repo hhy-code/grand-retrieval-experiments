@@ -11,12 +11,15 @@ def load_bundle(path):
     if missing:
         raise ValueError("Dataset is missing keys: {}".format(sorted(missing)))
     for graph in bundle["graphs"]:
-        if not {"id", "x", "edge_index"}.issubset(graph):
-            raise ValueError("Every graph requires id, x, and edge_index")
+        if not {"id", "x", "edge_index", "edge_attr"}.issubset(graph):
+            raise ValueError("Every graph requires id, x, edge_index, and edge_attr; rebuild the AIDS bundle")
         graph["x"] = torch.as_tensor(graph["x"], dtype=torch.float32)
         graph["edge_index"] = torch.as_tensor(graph["edge_index"], dtype=torch.long)
+        graph["edge_attr"] = torch.as_tensor(graph["edge_attr"], dtype=torch.float32)
         if graph["edge_index"].ndim != 2 or graph["edge_index"].shape[0] != 2:
             raise ValueError("edge_index must have shape [2, num_edges]")
+        if graph["edge_attr"].ndim != 2 or graph["edge_attr"].shape[0] != graph["edge_index"].shape[1]:
+            raise ValueError("edge_attr must have shape [num_edges, edge_feature_dim]")
     for split in ("train", "val", "test"):
         if split not in bundle["splits"]:
             raise ValueError("Missing split: {}".format(split))
