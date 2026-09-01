@@ -110,6 +110,7 @@ python train GRAND-GCN-GMN AIDS
 python train GRAND-GCN-GraphSim AIDS
 python train GRAND-GEM-GMN AIDS
 python train GRAND-GEM-GraphSim AIDS
+python train --config configs/aids_grand_gem_graphsim_a075_b01_g01.yaml
 ```
 
 Each command trains with its YAML configuration, restores the best Ebp or Mbp
