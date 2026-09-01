@@ -1,0 +1,1162 @@
+Grand: A Fast and Accurate Graph Retrieval Framework via
+Knowledge Distillation
+Lin Lan
+llan@sei.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Pinghui Wang∗
+phwang@mail.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Rui Shi
+srll724@stu.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Tingqing Liu
+Ltingqin@stu.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Juxiang Zeng
+jxzeng@sei.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Feiyang Sun
+fysun@sei.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Yang Ren
+renyang1@huawei.com
+Huawei Technologies Co Ltd
+GaussDB
+Shenzhen, China
+Jing Tao
+jtao@mail.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+Xiaohong Guan†
+xhguan@mail.xjtu.edu.cn
+Xi’an Jiaotong University
+MOE KLINNS Lab
+Xi’an, China
+ABSTRACT
+Graph retrieval aims to find the most similar graphs in a graph
+database given a query graph, which is a fundamental problem
+with many real-world applications in chemical engineering, code
+analysis, etc. To date, existing neural graph retrieval methods gener-
+ally fall into two categories: Embedding Based Paradigm (Ebp) and
+Matching Based Paradigm (Mbp). The Ebp models learn an individ-
+ual vectorial representation for each graph and the retrieval process
+can be accelerated by pre-computing these representations. The
+Mbp models learn a neural matching function to compare graphs on
+a pair-by-pair basis, in which the fine-grained pairwise comparison
+leads to higher retrieval accuracy but severely degrades retrieval
+efficiency. In this paper, to combine the advantage of Ebp in re-
+trieval efficiency with that of Mbp in retrieval accuracy, we propose
+a novel Graph RetrievAl framework via KNowledge Distillation,
+namely Grand. The key point is to leverage the idea of knowledge
+distillation to transfer the fine-grained graph comparison knowl-
+edge from an Mbp model to an Ebp model, such that the Ebp model
+can generate better graph representations and thus yield higher
+retrieval accuracy. At the same time, we can still pre-compute and
+index the improved graph representations to retain the retrieval
+∗Pinghui Wang is the corresponding author.
+†Also with Tsinghua University, Tsinghua National Lab for Information Science and
+Technology.
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+SIGIR ’24, July 14–18, 2024, Washington, DC, USA
+© 2024 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-0431-4/24/07
+https://doi.org/10.1145/3626772.3657773
+speed of Ebp. Towards this end, we propose to perform knowledge
+distillation from three perspectives: score, node, and subgraph lev-
+els. In addition, we propose to perform mutual two-way knowledge
+transfer between Mbp and Ebp, such that Mbp and Ebp complement
+and benefit each other. Extensive experiments on three real-world
+datasets show that Grand improves the performance of Ebp by a
+large margin and the improvement is consistent for different com-
+binations of Ebp and Mbp models. For example, Grand achieves
+performance gains of mostly more than 10% and up to 16.88% in
+terms of Recall@𝐾 on different datasets.
+CCS CONCEPTS
+• Information systems→ Retrieval models and ranking;Learn-
+ing to rank.
+KEYWORDS
+GNN, Graph retrieval, Knowledge distillation
+ACM Reference Format:
+Lin Lan, Pinghui Wang, Rui Shi, Tingqing Liu, Juxiang Zeng, Feiyang Sun,
+Yang Ren, Jing Tao, and Xiaohong Guan. 2024. Grand: A Fast and Accurate
+Graph Retrieval Framework via Knowledge Distillation. In Proceedings of
+the 47th International ACM SIGIR Conference on Research and Development
+in Information Retrieval (SIGIR ’24), July 14–18, 2024, Washington, DC, USA.
+ACM, New York, NY, USA, 10 pages. https://doi.org/10.1145/3626772.3657773
+1 INTRODUCTION
+Graphs are widely used to model relationships between entities
+in a variety of domains, including bioinformatics, cheminformat-
+ics, computer security, social network analysis, and recommender
+systems. Among various graph analysis tasks, graph retrieval is
+a fundamental and critical problem with many real-world appli-
+cations, such as finding the chemical compounds most relevant
+1639\nSIGIR ’24, July 14–18, 2024, Washington, DC, USA Lin Lan et al.
+Node Encoder
+Graph Encoder
+Node Encoder
+Graph 
+Representation
+Node Encoder Node Encoder
+Matching 
+Function
+Graph Encoder
+Graph 
+Representation
+Score-level 
+Knowledge Distillation
+Node-level 
+Knowledge Distillation
+Subgraph-level 
+Knowledge Distillation
+Similarity Score Similarity Score
+Node 
+Representations
+Node 
+Representations
+Query Graph Candidate Graph
+Node 
+Representations
+Node 
+Representations
+Graph 
+Database
+All Graph 
+Representations
+Query Graph Query Graph 
+Representation
+Fast Vector Similarity
+Search
+Top-  
+Candidate Graphs
+Offline Operation
+Online Operation
+Figure 1: A schematic description of our framework Grand.
+to a query compound in cheminformatics, binary function simi-
+larity search for malware and vulnerability detection in computer
+security, and personalized recommendation based on the similarity
+between ego-networks in recommender systems.
+A common approach for graph retrieval is to scan the entire
+graph database and find the most similar graphs to a query graph.
+Traditional methods rely on various graph similarity/distance mea-
+sures such as Graph Edit Distance (GED) and Maximum Common
+Subgraph (MCS). However, it is known that the computation of
+GED and MCS is NP-hard, which incurs high computational over-
+head, especially when dealing with large graph databases. In recent
+years, neural graph retrieval [2, 10, 21] has attracted widespread
+attention from both academia and industry, which aims to learn
+a neural network to compute the similarity between graphs and
+allows fast similarity computation after training. Benefiting from
+end-to-end learning from data, neural methods are able to perform
+retrieval based on human-labeled relevance information in addition
+to graph proximity measures such as GED. In this paper, we focus
+on the scope of neural graph retrieval.
+Existing neural graph retrieval methods can be divided into two
+categories: embedding based and matching based paradigms. Fig-
+ure 1 gives an overall view of these two paradigms. The embedding
+based paradigm (Ebp) maps two input graphs into a common latent
+space and computes their similarity score between vectorial graph
+representations, while the matching based paradigm (Mbp) learns
+neural matching functions to compute the similarity score between
+two graphs. Generally speaking, Mbp provides better retrieval accu-
+racy than Ebp owing to that Mbp builds some low-level matching
+signals (e.g., cross-graph similarity matrices) and captures more
+fine-grained interaction patterns across graphs via the matching
+function (e.g., deep neural networks). However, Mbp’s retrieval
+speed is too slow for practical use because it needs to pair a query
+graph with each candidate graph and feed all these pairs through
+the entire model. On the other hand, Ebp’s retrieval speed is much
+faster because we can compute candidate graphs’ representations
+in advance and thus the retrieval problem can be considered as a
+nearest neighbor search problem in the corresponding vector space.
+Overview of Our Framework. A natural question to ask is how
+to combine the advantage of Ebp in terms of retrieval efficiency
+with that of Mbp in terms of retrieval accuracy. To answer this
+question, we propose a novel fast and accurate Graph RetrievAl
+framework via kNowledge Distillation, namely Grand. The key
+point is that we leverage the idea of knowledge distillation (KD) to
+bridge Ebp and Mbp. Given that Mbp is able to capture richer and
+more fine-grained matching patterns between two graphs, we con-
+sider Mbp and Ebp as the teacher and student, respectively, and try
+to distill these patterns (hereafter also called dark knowledge) from
+Mbp to Ebp. Specifically, we define three types of dark knowledge,
+namely score-level, node-level, and subgraph-level knowledge, and
+perform knowledge transfer1 at these three different levels. In ad-
+dition, considering the architecture difference between Mbp and
+Ebp as shown in Fig. 1, we argue that Mbp is better at capturing
+fine-grained similarity information between graphs via the pair-
+wise matching function while Ebp is better at capturing high-level
+similarity information by generating global graph embeddings. In
+principle, they should be mutually beneficial. Thus, we propose to
+1 We use the terms knowledge transfer and knowledge distillation interchangeably
+throughout this paper.
+1640\nGrand: A Fast and Accurate Graph Retrieval Framework via Knowledge Distillation SIGIR ’24, July 14–18, 2024, Washington, DC, USA
+perform mutual two-way KD betweenMbp and Ebp during training.
+After distillation, we expect to obtain anEbp model that can provide
+better graph representations for higher retrieval accuracy. At the
+same time, we also accelerate the Ebp model’s retrieval process
+through pre-computing candidate graphs’ representations. There-
+fore, we retain both the retrieval efficiency of Ebp and the retrieval
+accuracy of Mbp.
+To sum up, our contributions are as follows:
+• We formally summarize two typical paradigms for graph retrieval:
+Ebp and Mbp, and bridge the two paradigms to improve the trade-
+off between accuracy and efficiency.
+• We propose a novel graph retrieval framework Grand to bridge
+Ebp and Mbp through knowledge distillation. Specifically, we
+perform knowledge transfer at different topological scales and
+carry out a mutual two-way KD such that Ebp and Mbp can
+complement and benefit each other during training.
+• We conduct extensive experiments on three real-world datasets.
+The empirical results show that our Grand improves the perfor-
+mance of Ebp models by a large margin and the improvement
+is consistent for different combinations of Ebp and Mbp models.
+For example, Grand achieves performance gains of mostly over
+10% and up to 16.88% in terms of Recall@𝐾 on different datasets.
+Additionally and interestingly, we observe that Grand also im-
+proves the performance of Mbp models owing to the mutual
+two-way KD. Moreover, we provide several ablation studies to
+demonstrate the effectiveness of the design choices in Grand.
+2 RELATED WORK
+2.1 Traditional Graph Retrieval
+This line of work, also known as graph similarity search, retrieves
+graphs based on predefined graph similarity measures, such as
+GED [30, 44], MCS [3, 31], missing edges and features [40, 43, 45, 50],
+graph alignment [34], and graph kernels [26]. Among them, GED is
+one of the most commonly used measures due to its generality, and
+thus most traditional works focus on GED based graph retrieval.
+Given the NP-hardness of the computation of GED, existing so-
+lutions are typically developed within a filtering-and-verification
+framework to speed up the retrieval process. Inspired by the 𝑞-
+gram idea for string similarity search [35], most filtering techniques
+build an inverted index on specially designed𝑞-gram features of
+graphs and compute GED lower bounds by exploiting matching
+and mismatching𝑞-gram features, exemplified by tree-structured
+𝑞-grams [37, 44], path-based 𝑞-grams [49], and graph partition
+based 𝑞-grams [22, 48]. In addition, there are also some works
+that compute GED lower bounds in pairs without indexing. For
+example, BSS_GED [5] derives a GED lower bound based on the
+vertex degrees of two graphs to be compared.Inves [19] proposes a
+bridge-based lower bound estimation technique that incrementally
+partitions a graph based on the query graph and uses the results to
+compute a lower bound of their GED. In principle, these algorithms
+can be used in both the filtering and verification phases owing to
+the pairwise computation.
+However, traditional graph retrieval methods like the above are
+limited in two ways. First, they are still too slow to retrieve from
+large graph databases as shown in [29]. Second, these methods are
+built upon explicit handcrafted structural features and are dedicated
+to specific applications (e.g., where GED is of primary interest), and
+thus fail to perform retrieval according to human-labeled relevance
+information.
+2.2 Neural Graph Retrieval
+Neural graph retrieval has received considerable attention in re-
+cent years. The core of it is to learn a neural model to compute
+the similarity score between two graphs. Generally, the existing
+approaches can be grouped into two paradigms: Ebp and Mbp.
+Ebp. Ebp learns an individual graph representation for each graph
+and computes the similarity between the representations of two
+graphs as their graph similarity. A recent trend is to use graph
+neural networks (GNNs) to learn graph representations and various
+GNN models have been proposed, such as MPNN [9], GCN [20],
+GraphSage [11], GAT [36], and GIN [39]. More recent work is
+GHashing [29], which further learns a GNN based hash function
+to generate binary graph representations, allowing faster graph
+similarity search with Hamming distance.
+Mbp. Compared with Ebp, the main innovation of Mbp lies in the
+use of a matching function to capture fine-grained similarity in-
+formation on a pair-by-pair basis. For instance, GMN [
+21] uses a
+cross-graph node-wise attention mechanism to generate mutually
+dependent node representations for each pair of graphs, which are
+further transformed into the corresponding graph representations
+to obtain the final similarity score. Ling et al. [ 23, 24] further ex-
+tend GMN by introducing cross-graph node-graph attention mecha-
+nisms. SimGNN [1] combines graph representations with histogram
+features extracted from pairwise node similarity scores across two
+graphs to compute their similarity score. GraphSim [2] constructs
+a node-level similarity matrix and directly feeds it into a convolu-
+tional neural network to predict the similarity score between two
+graphs. H2MN [47] converts each graph to a hypergraph and then
+designs a corresponding cross-hypergraph attention mechanism to
+predict the similarity between two graphs. In summary, different
+Mbp models mainly differ in the design of the matching function.
+2.3 Research Involving Graph Comparison
+Recently, significant interest has been devoted to solving several
+problems involving graph comparison in an end-to-end learning-
+based manner, in addition to the problem of graph retrieval or
+graph similarity learning studied in this paper. For example, some
+works [7, 8, 13] study the problem of graph alignment, which aims
+to find node correspondences between two graphs; some works [6,
+25, 42] study the problem of subgraph matching or counting, of
+which the goal is to find or count a certain subgraph structure
+in a target graph. These problems are related to ours but are not
+the same. In our setting, we query a graph database to find the
+most similar graphs to an input graph. In the future, it would be
+interesting to see if some insights into these related problems can
+inspire better solutions to the problem of graph retrieval.
+3 PROBLEM FORMULATION
+Throughout this paper, we use lowercase letters to denote scalars,
+boldface lowercase letters to denote vectors, and boldface uppercase
+letters to denote matrices. LetG =(V,E) be a graph whereV =
+1641\nSIGIR ’24, July 14–18, 2024, Washington, DC, USA Lin Lan et al.
+{𝑣0,𝑣 1,···} is a set of vertices andE⊆V×V is a set of edges. In
+addition, each node𝑣𝑖∈V is associated with a feature vector.
+The problem of graph retrieval refers to retrieving one or more
+similar graphs from a database for a query graph. Formally, given
+a corpus of query graphsDQ ={G𝑞 =(V𝑞,E𝑞)} and a corpus of
+candidate graphsDC ={G𝑐 =(V𝑐,E𝑐)}, we are interested in, for
+eachG𝑞, finding{G𝑐|G𝑐∈DC∧ Rel(G𝑞,G𝑐) = 1}. The Rel(·,·)
+function equals 1 if two graphs are similar and 0 otherwise, and its
+definition varies according to different contexts such as graph edit
+distance and human-labeled relevance judgments.
+In this paper, we formulate the above problem as a ranking
+problem. Specifically, we learn a model 𝑓 :DQ×DC→ R that
+takes two graphs as input and outputs the similarity score between
+them, and further rankDC for eachG𝑞. The model is trained by
+minimizing the following ranking loss:
+Lrank =
+∑︁
+G𝑞∈DQ
+𝐾neg∑︁
+𝑘=1
+max(0, 1−𝑓(G𝑞,G𝑐+
+𝑞)+ 𝑓(G𝑞,G
+𝑐−
+𝑘
+𝑞 )) (1)
+s.t.G𝑐+
+𝑞 ,G
+𝑐−
+𝑘
+𝑞 ∈DC; Rel(G𝑞,G𝑐+
+𝑞) = 1; Rel(G𝑞,G
+𝑐−
+𝑘
+𝑞 ) = 0,
+where𝐾neg is the number of negative samples for each query graph
+during training. In this paper, we use 𝐾neg = 1 (i.e., triplet loss)
+as many previous works [ 10, 15, 21]. For simplicity, we confine
+ourselves to the above ranking loss formula, but it is not hard to
+extend our method to other forms of ranking losses (e.g., listwise
+losses [4, 33, 38]) as well as hard negative sampling strategies [16],
+which we leave as future work.
+4 THE PROPOSED FRAMEWORK
+In this section, we present our proposed graph retrieval framework
+Grand in detail, which distills dark knowledge from Mbp to Ebp
+from three perspectives: score-level, node-level, and subgraph-level
+knowledge distillation. See Fig. 1 for a schematic illustration. In
+the following, we first elaborate on the three types of distillation
+schemes. Then, we give the overall optimization process of Grand.
+Finally, we discuss how to applyGrand to practical graph retrieval
+systems, followed by the time complexity analysis of Grand. Here-
+after, for ease of exposition, we use the superscripts or subscripts
+“Ebp” and “Mbp” to indicate the notations related to the embedding
+based and matching based paradigms, respectively.
+4.1 Recap of Ebp and Mbp
+For completeness and consistency, we briefly describe howEbp and
+Mbp build the model𝑓 . Given a pair of input graphs(G𝑞,G𝑐), Ebp
+first uses a node encoder Φnode to compute node representations:
+H𝑞 = Φnode(G𝑞), H𝑐 = Φnode(G𝑐), (2)
+where H𝑞∈ R|V𝑞|×· and H𝑐∈ R|V𝑐|×· . Note that the node encoder
+also takes node features as input. Then, a graph encoder Φgraph is
+employed to obtain a graph representation for each graph:
+g𝑞 = Φgraph(H𝑞), g𝑐 = Φgraph(H𝑐). (3)
+Finally, a similarity metric Φsim between g𝑞 and g𝑐 is taken to
+calculate the similarity score betweenG𝑞 andG𝑐:
+𝑟𝑞,𝑐 = Φsim(g𝑞, g𝑐). (4)
+As an example, the graph embedding model (GEM) in [21] imple-
+ments Φnode as a message-passing based graph neural network,
+Φgraph as a multilayer perceptron (MLP) with gated output, fol-
+lowed by a sum graph pooling as well as another MLP, and Φsim as
+the negative squared Euclidean distance, i.e.,
+Φsim(g𝑞, g𝑐) =−∥ g𝑞− g𝑐∥2
+2. (5)
+In general, Mbp also uses a node encoder Φnode to compute H𝑞
+and H𝑐. The difference is that this kind of models introduces a
+matching function Φmatch that directly takes both H𝑞 and H𝑐 as
+input and generates the corresponding similarity score:
+𝑟𝑞,𝑐 = Φmatch(H𝑞, H𝑐). (6)
+For instance, GraphSim [2] implements Φnode as a graph convo-
+lutional network (GCN) [20]. For Φmatch, GraphSim constructs a
+node-level matching matrix as H𝑞HT𝑐 2 and feeds the matrix to a
+convolutional neural network followed by an MLP to predict the
+similarity score. Another typical example is the graph matching
+model in [21] which implements Φmatch by updating H𝑞 and H𝑐
+through a cross-graph attention mechanism and utilizing the up-
+dated node representations to compute the similarity score in the
+same way as Φgraph and Φsim of GEM [21].
+4.2 The Distillation Schemes of Grand
+Score-Level Knowledge Distillation. Compared with the binary
+ground-truth labels Rel(·,·), the similarity scores𝑓(·,·) provided
+by a well-trained model measure how much two graphs are sim-
+ilar as well as reveal how much a query graph is more similar to
+one candidate graph than another. Thus, we propose to align the
+similarity scores predicted by Ebp with those generated by Mbp.
+According to Eq. (1), each query graphG𝑞 is associated with one
+positive candidate graph and𝐾neg negative candidate graphs. For
+eachG𝑞, we use r𝑞∈ R1+𝐾neg to denote the predicted similarity
+scores between it and the associated candidate graphs:
+r𝑞 =[𝑓(G𝑞,G𝑐+
+𝑞),𝑓(G𝑞,G𝑐−
+1
+𝑞 ),··· ,𝑓(G𝑞,G
+𝑐−
+𝐾neg
+𝑞 )]. (7)
+We further convert the similarity vectors rEbp𝑞 and rMbp𝑞 to proba-
+bility distributions using a softmax function𝜎𝜏 with a temperature
+parameter𝜏. Following [14],𝜎𝜏 is defined as
+𝜎𝜏(z) = exp(𝑧𝑖/𝜏)˝
+𝑗 exp(𝑧𝑗/𝜏), (8)
+where z is the input vector and𝜏 > 0 is the temperature parameter
+to control the softness of the output probability distribution [14].
+Furthermore, we distill the score-level knowledge from Mbp to Ebp
+by minimizing the following loss function:
+LM→E
+score =
+∑︁
+G𝑞∈DQ
+KL(𝜎𝜏score(rMbp
+𝑞 )∥ 𝜎𝜏score(rEbp
+𝑞 )), (9)
+where KL(·∥·) denotes the Kullback-Leibler divergence function
+and𝜏score is the temperature parameter for the score-level KD.
+Node-Level Knowledge Distillation. As described in § 3, both
+Ebp and Mbp learn node representations for each of the two in-
+put graphs separately. In addition, the node representations inher-
+ently carry significant information about the characteristics of the
+2 Please note that the original paper also uses the node representations of the interme-
+diate GCN layers to construct similarity matrices, which we omit here for brevity.
+1642\nGrand: A Fast and Accurate Graph Retrieval Framework via Knowledge Distillation SIGIR ’24, July 14–18, 2024, Washington, DC, USA
+corresponding graphs. These two points allow us to transfer the
+node-level knowledge from Mbp to Ebp. One simple way is to set
+the sizes of node representations learned by the two paradigms to
+be the same and directly align the node representations such as
+minimizing the loss
+∥HEbp
+𝑞 − HMbp
+𝑞 ∥2
+2+∥ HEbp
+𝑐 − HMbp
+𝑐 ∥2
+2. (10)
+However, there is usually a significant scale difference between the
+representations produced by the two paradigms, which is due to
+the different network architectures of the two paradigms and also
+because Mbp is pre-trained in the context of KD. The scale differ-
+ence will increase the convergence difficulty and lead to inferior
+performance.
+To avoid this problem, given a pair of graphs(G𝑞,G𝑐), we pro-
+pose to measure how much a query node 3 inG𝑞 attends to each
+candidate node inG𝑐 and aligns the attention weights across the
+two paradigms. Mathematically, for each𝑣𝑖∈V𝑞, we compute the
+attention weights as
+𝝎𝑖,𝑐 =𝜎𝜏node(H𝑞,𝑖∗HT
+𝑐) (11)
+and achieve alignment between the two paradigms by minimizing
+KL(𝝎Mbp
+𝑖,𝑐 ∥ 𝝎Ebp
+𝑖,𝑐 ). Here,𝜏node is the temperature parameter for
+the node-level KD and𝑖∗ in the subscript denotes the𝑖th row vector
+(i.e., the dimension is 1×· ) of the corresponding matrix. Then, we
+distill the node-level knowledge by aligning the attention weights
+over all query nodes of all graph pairs in Eq. (1). In particular, we
+minimize the following loss function:
+LM→E
+node =
+∑︁
+G𝑞∈DQ
+∑︁
+G𝑐∈B𝑞
+∑︁
+𝑣𝑖∈V𝑞
+KL(𝝎Mbp
+𝑖,𝑐 ∥ 𝝎Ebp
+𝑖,𝑐 ), (12)
+whereB𝑞 ={G𝑐+
+𝑞 ,G𝑐−
+1
+𝑞 ,··· ,G
+𝑐−
+𝐾neg
+𝑞 } denotes the set consisting of
+one positive graph and𝐾neg negative graphs forG𝑞 during training.
+Subgraph-Level Knowledge Distillation. A graph can be natu-
+rally divided into groups of nodes with dense connections internally
+and sparser connections between groups, and different groups have
+different properties that together characterize the global properties
+of the graph. For example, a molecule can be dissected into small
+groups of atoms (called functional groups) and these groups are
+important for comparing different molecules in practice. Motivated
+by this fact, we propose to further perform knowledge distillation
+at the subgraph level. Specifically, given a pair of graphs
+(G𝑞,G𝑐),
+we partitionG𝑞 andG𝑐 into a set of densely connected subgraphs,
+respectively, based on the graph structure:
+SG𝑞 ={G 1
+𝑞,G2
+𝑞,···} , SG𝑐 ={G 1
+𝑐,G2
+𝑐,···} , (13)
+whereG𝑘𝑞 =(V𝑘𝑞,E𝑘𝑞),𝑘 = 1, 2,··· withV𝑘𝑞 ⊆V𝑞 andE𝑘𝑞 ⊆E 𝑞
+denotes a subgraph inSG𝑞 , and similar notations are used for the
+subgraphs inSG𝑐 .
+The partitioning step can be accomplished by using off-the-shelf
+graph partitioning or community detection algorithms such as
+Metis [
+18] and FluidC [27]. In this paper, we employ FluidC to
+partition each graph into𝑀 subgraphs. We empirically find that
+setting𝑀 to the square root of the number of nodes (i.e.,𝑀 = √︁|V𝑞|
+forG𝑞 and𝑀 =
+√︁
+|V𝑐| forG𝑐) shows satisfactory performance and
+3 Hereafter, for simplicity, we use the terms “query node” to refer to a node in a query
+graph, and “candidate node” to refer to a node in a candidate graph.
+thus does not tune 𝑀 further. For each graph, the partitioning
+process is repeated several times and the partition with the highest
+modularity is selected, as suggested in the original paper [27].
+To transfer the subgraph-level knowledge, we align the pairwise
+similarity between the subgraphs inSG𝑞 andSG𝑐 across Mbp and
+Ebp, analogously to the node-level KD above. Formally, we first
+compute the representation of each subgraph via a sum-pooling
+operation over the representations of the nodes contained therein,
+as follows:
+g𝑘
+𝑞 =
+∑︁
+𝑣𝑖∈V𝑘𝑞
+H𝑞,𝑖∗, g𝑘
+𝑐 =
+∑︁
+𝑣𝑖∈V𝑘𝑐
+H𝑐,𝑖∗. (14)
+Then, we compute the similarity distribution over SG𝑐 for each
+G𝑘𝑞∈SG𝑞 as follows:
+𝝍𝑞,𝑘,𝑐 =𝜎𝜏subgraph(g𝑘
+𝑞[g1
+𝑐⊕···⊕ g𝑀
+𝑐]), (15)
+where𝜏subgraph is the temperature parameter for the subgraph-level
+KD and[···⊕···] denotes concatenation along the row axis.
+Based on the above, we further align the similarity distributions
+across the two paradigms for each subgraph of every query graph
+in Eq. (1) by minimizing the following loss function:
+LM→E
+subgraph =
+∑︁
+G𝑞∈DQ
+∑︁
+G𝑐∈B𝑞
+∑︁
+G𝑞,𝑘∈SG𝑞
+KL(𝝍Mbp
+𝑞,𝑘,𝑐∥ 𝝍Ebp
+𝑞,𝑘,𝑐). (16)
+4.3 Optimization
+In this subsection, we discuss the learning strategies to optimize
+our framework Grand.
+Mutual KD. Traditionally, one-way KD is mainly used for model
+compression to transfer the knowledge of a large pre-trained teacher
+network (e.g., a 101-layer ResNet) to a small student network (e.g.,
+an 18-layer ResNet). In this paper, what we are interested in is the
+difference between the overall architecture of Mbp and Ebp, which
+leads that Mbp can capture more fine-grained similarity informa-
+tion between two graphs through the pairwise matching function
+while Ebp is better at capturing high-level similarity via global
+graph embeddings. Drawing from this, we argue that Mbp and Ebp
+complement each other and should be mutually beneficial. How-
+ever, the one-way KD keeps Mbp unchanged and only performs
+one-way knowledge transfer from Mbp to Ebp, making it impos-
+sible for Mbp to obtain feedback from the learning state of Ebp
+and further improve the learning process. Inspired by [46], we pro-
+pose to jointly optimize Mbp and Ebp to enable mutual (two-way)
+knowledge transfer between them instead. Mathematically, instead
+of performing pre-training using the ranking loss, we define the
+following loss function to train the Mbp model:
+LMbp =𝛼Lrank+( 1−𝛼)L E→M
+score +𝛽LE→M
+node +𝛾LE→M
+subgraph, (17)
+Similarly, we define the following loss function to train the Ebp
+model:
+LEbp =𝛼Lrank+( 1−𝛼)L M→E
+score +𝛽LM→E
+node +𝛾LM→E
+subgraph, (18)
+where𝛼,𝛽,𝛾 are the same tuning parameters as in Eq. (18). Here,
+the loss functions having superscript “ E→ M” are equivalent to
+those induced by swapping the order of the arguments of KL(·∥·)
+in the counterpart loss functions having the same subscripts but su-
+perscript “M→ E”. For example, compared with KL(𝜎𝜏score(rMbp𝑞 )∥
+1643\nSIGIR ’24, July 14–18, 2024, Washington, DC, USA Lin Lan et al.
+𝜎𝜏score(rEbp𝑞 )) inLM→Escore , we use KL(𝜎𝜏score(rEbp𝑞 )∥ 𝜎𝜏score(rMbp𝑞 )) in
+LE→Mscore . During the training process, we alternately update theMbp
+and Ebp models by minimizingLMbp andLEbp, respectively. In
+principle, our proposed framework Grand is model-agnostic and
+able to transfer knowledge between any two models that conform
+to Mbp and Ebp, respectively.
+4.4 Application to Graph Retrieval Systems
+After optimization, we obtain an Ebp model𝑓Ebp that can produce
+powerful graph representations for graph retrieval with the support
+of the knowledge from Mbp. Given the set of candidate graphsDC
+to be retrieved, we first useΦnode and Φgraph of𝑓Ebp to compute the
+graph representations g𝑐 of all graphsG𝑐∈DC which can be done
+in advance or offline. Then, when it comes to a query graph G𝑞,
+we similarly compute its representation g𝑞, and retrieve the top-𝐾
+candidate graphs according to the similarity between g𝑞 and each
+candidate graph’s representationg𝑐. The similarity is defined by the
+similarity metric Φsim in𝑓Ebp, which is usually negative Euclidean
+distance or cosine (dot product) similarity.
+Moreover, in practice, there are basically two kinds of retrieval
+strategies: the re-ranking and the full ranking. For the re-ranking
+strategy, the Ebp model learned by our Grand can serve as the
+fast first-stage retriever to fetch a small set of candidate graphs,
+and then a more powerful but slow second-stage retriever (e.g., an
+Mbp model) re-ranks these candidate graphs to obtain the top-𝐾
+similar graphs. For the full ranking strategy, the Ebp model learned
+by Grand can be used to retrieve the top-𝐾 similar graphs directly
+from the entire candidate graphs owing to its good trade-off be-
+tween retrieval accuracy and efficiency.
+4.5 Time Complexity Analysis
+Since Grand does not make any changes to the internals of Ebp,
+once Grand finishes optimization, we use the resulting Ebp model
+to perform graph retrieval as usual. As discussed in § 4.4, we cast
+the retrieval problem as a problem of similar vector search. The
+naive retrieval solution’s time complexity is 𝑂(𝑁𝑑), where 𝑁 is
+the number of candidate graphs and 𝑑 is the graph representa-
+tion’s dimension. For large-scale graph retrieval, we can further
+employ off-the-shelf efficient vector similarity search tools, such as
+faiss [17], to speed up the retrieval process.
+5 EXPERIMENTS
+In this section, we conduct experiments on three real-world datasets
+to comparatively evaluate our framework. Specifically, we aim to
+answer the following questions:
+• RQ1: Can Grand effectively transfer the knowledge of graph
+similarity perception across an Mbp model and an Ebp model,
+and remarkably improve the retrieval accuracy of theEbp model?
+• RQ2: Does our distillation scheme outperform other knowledge
+distillation methods designed for GNNs?
+• RQ3: Does Grand incur much extra computational in retrieval
+stage?
+• RQ4: What is the performance impact of different levels of knowl-
+edge transfer (i.e., at the score, node, and subgraph levels)?
+Table 1: Statistics of the datasets. The fraction of positive
+labels is the ratio of the number of similar graph pairs to the
+square of the total number of graphs.
+Dataset
+AIDS CCI FFmpeg
+#Graphs 700
+111, 603 38 , 048
+Avg. #Nodes 8.9 23 .7 27 .89
+#Node features 29 21 6
+#Training graphs 420 99 , 442 33 , 243
+#Validation graphs 140 1 , 000 1 , 000
+#Test graphs 140 11 , 161 3 , 805
+Fraction of positive labels (%) 0.47 0 .0026 0 .051
+5.1 Experimental Setup
+5.1.1 Datasets. Three publicly available real-world datasets are
+used in our experiments. Their statistics are summarized in Table 1.
+• AIDS [2]. This is an antiviral screening compound dataset from
+the Developmental Therapeutics Program at NCI/NIH, which
+has been a popular benchmark for graph similarity search [ 1,
+2, 37, 48]. It originally consists of 42, 687 chemical compounds,
+each represented as a graph with atoms as nodes and chemical
+bonds as edges. Following [1, 2], we use a subset of the dataset,
+which contains 700 graphs and the true GED between each pair of
+graphs obtained by the exponential-time exact GED computation
+algorithm A∗ [12]. We use one-hot encodings of atom types as
+node features. Besides, for each graph, we regard the graphs with
+the minimum GED as similar graphs with respect to it.
+• CCI. This dataset is constructed based on the chemical-chemical
+interactions from the STITCH database (version 5.0) [ 32]. The
+STITCH database contains a set of interaction pairs of chemi-
+cal compounds, and each interaction pair is associated with an
+integer confidence score ranging from 0 to 999. We consider
+two compounds with a confidence score more than 800 to be
+similar, and dissimilar otherwise. In addition, the database gives
+SMILES strings of different chemical compounds. We use RDKit
+to convert the SMILES string of each compound to a graph of
+which nodes are atoms, edges are chemical bonds, and input node
+features are one-hot encodings of atom types.
+• FFmpeg [23]. This is a collection of Control-Flow Graphs (CFGs)
+of binary functions compiled fromFFmpeg. This dataset uses GCC
+v5.4 and Clang v3.8 to compile FFmpeg with 4 different compiler
+optimization levels (O0-O3). We consider two CFGs compiled
+from the same source code function to be similar, and dissimilar
+otherwise. In a CFG, nodes represent basic blocks of assembly in-
+structions and edges represent jumps in the control flow, and each
+node is associated with a 6-dimensional feature vector derived
+from six block-level attributes (i.e., String Constants, Numeric
+Constants, No. of Instructions, No. of Transfer Instructions, No.
+of Call Instructions, and No. of Arithmetic Instructions). In ad-
+dition, we row-normalize input node feature vectors for each
+graph.
+5.1.2 Baselines. Our main contribution is to propose a framework
+Grand to bridge Ebp and Mbp via knowledge distillation. To verify
+the effectiveness of Grand, we choose several representative Ebp
+and Mbp models as baselines, and investigate different combinations
+1644\nGrand: A Fast and Accurate Graph Retrieval Framework via Knowledge Distillation SIGIR ’24, July 14–18, 2024, Washington, DC, USA
+within our framework. Specifically, in our experiments, we consider
+the following baselines:
+• (Ebp) GCN [20] uses a localized first-order approximation of
+spectral graph convolutions to learn node embeddings. Then, we
+use the same way as GEM to learn graph embeddings.
+• (Ebp) GEM [21] uses message passing to learn node embeddings
+and then uses a gated MLP followed by sum graph pooling as
+well as another MLP to learn graph embeddings.
+• (Mbp) GMN [21] is an extension of GEM. It introduces a cross-
+graph node-wise attention mechanism to message passing in
+order to learn graph-pair-specific node embeddings and then
+uses the same way as GEM to learn graph embeddings.
+• (Mbp) GraphSim [2] first uses a GNN to learn node embeddings.
+Then, it constructs a cross-graph node-wise similarity matrix,
+which is fed into a CNN followed by an MLP to predict the
+final similarity score between two graphs. Note that GraphSim
+is an improved version of SimGNN [1] and thus we omit the
+comparison with SimGNN here.
+• (KD) EGSC [28] is a graph similarity computation framework
+via Knowledge Distillation. It introduces an early-feature fusion
+model that takes the GIN as the backbone and proposes a novel
+Knowledge Distillation method where the joint embeddings are
+decomposed to distill. Unlike our framework which can be used
+for any two GNN models, ECSC is only used to distill its designed
+models.
+• (KD) CPF [41] is a knowledge distillation framework that uses
+their knowledge distillation method to distill their designed stu-
+dent model in node classification. To compare their distillation
+methods, we added soft labels for node classification during train-
+ing for distilling node type knowledge.
+In principle, our framework Grand is general enough to be applied
+to any two models respectively conforming to Ebp and Mbp. Please
+note that GHashing [29] improves Ebp by learning binary graph
+representations to use Hamming distance to further accelerate the
+retrieval speed, while Grand improves Ebp by transferring knowl-
+edge from Mbp to Ebp to reach higher retrieval accuracy. Since
+Grand and GHashing are developed from different perspectives
+with different goals, we do not include GHashing as a baseline
+here. Technically, they should be complementary to each other, and
+we leave their combination as future work.
+5.1.3 Parameter Settings. We implement our Grand and the
+involved Ebp and Mbp models in TensorFlow, and conduct all the
+experiments on a server with 2 Intel Xeon Gold 6140 CPUs and
+8 Nvidia Tesla V100 GPUs. For GCN, we use a three-layer GCN
+with the number of hidden units as 128 and ReLU nonlinearity, and
+use the same graph encoder as GEM. For GEM and GMN, we use
+the network architecture hyperparameters recommended in the
+original paper [21]. For GraphSim, we use the same node encoder
+as GEM for better performance. The matching function of Graph-
+Sim is a five-layer CNN followed by a five-layer MLP on the AIDS
+dataset, and a six-layer CNN followed by a seven-layer MLP on
+the CCI and FFmpeg datasets. Since our focus is to bridge Ebp and
+Mbp, we do not put much effort into tuning the hyperparameters
+of the above models. For Grand, we perform a grid search over
+𝛼∈{ 0.25, 0.5, 0.75} and𝛽,𝛾 ∈{ 0.001, 0.01, 0.1, 1, 10} As for the tem-
+perature parameters𝜏score,𝜏 node,𝜏 subgraph, we refer to the values
+in the original paper [14].
+For all datasets and models, we use the Adam optimizer with
+a learning rate of 0.001 to perform mini-batch training with early
+stopping. The batch sizes are set to 32, 64, 64, and 128 for the
+AIDS, CCI, and FFmpeg datasets, respectively. We set the number
+of training iterations to 30, 000 for the AIDS dataset and 120, 000
+for the CCI, and FFmpeg datasets.
+5.2 Retrieval Quality (RQ1 & RQ2)
+To demonstrate the effectiveness of ourGrand, we first compare the
+retrieval accuracy of different methods. Table 2 presents the com-
+parison results in terms of NDCG@𝐾 and Recall@𝐾. For Grand,
+we consider different combinations of Ebp and Mbp models, and a
+specific combination is named in the form of “Grand (EBP+MBP)”.
+The reported performance of Grand is the performance of the Ebp
+models trained under our framework. In Table 3, we also compare
+our distillation scheme with the state-of-the-art knowledge distilla-
+tion methods EGSC and CPF for GNNs. We useGrand to represent
+our distillation methods and compare them to EGSC and CPF with
+different model combinations. To eliminate randomness, we report
+the average results over 10 random seeds here as well as in the
+following quantitative experiments.
+From Tables 2 and 3, we find the following observations.
+First, Grand significantly improves the performance ofEbp mod-
+els (i.e., GCN and GEM) by a large margin, especially in terms of
+Recall@𝐾. In addition, the performance improvement is consistent
+across different combinations of Ebp and Mbp models as well as
+different datasets. These findings demonstrate that our proposed
+Grand is a general framework that can effectively transfer knowl-
+edge from Mbp to Ebp and enable Ebp to generate better graph
+representations for retrieval. In addition, we see that using Graph-
+Sim as Mbp generally yields higher performance improvement over
+Ebp than using GMN as Mbp, even when their standalone-trained
+performance is similar. This indicates that GraphSim achieves bet-
+ter knowledge transfer during training and might be due to that
+GraphSim is a more canonical Mbp model compared with GMN.
+Second, GEM obtains better retrieval performance than GCN,
+because GEM learns a more powerful aggregation scheme than
+GCN to represent and distinguish different graph structures. In
+addition, we observe that GEM shows competitive performance
+against GMN and GraphSim on AIDS dataset, and the reason could
+be that this is a small dataset andGEM can afford to learn a common
+latent space to well represent the relationships between graphs.
+Third, compared with the state-of-the-art knowledge distilla-
+tion methods EGSC and CPF customized for GNNs, our framework
+Grand has a significant advantage in retrieval quality. Our pro-
+posed frameworks outperform the baselines over three real-world
+datasets with every model combination. This is because compared
+with the baselines which simply perform knowledge distillation on
+node classification or graph embedding fusion, our distillation meth-
+ods at three different types can extract more sufficient knowledge,
+thereby obtaining better retrieval results.
+Another interesting observation is that in many cases the per-
+formance of Grand (i.e., the Ebp models trained under Grand) is
+1645\nSIGIR ’24, July 14–18, 2024, Washington, DC, USA Lin Lan et al.
+Table 2: Comparison of retrieval quality of different methods on AIDS, CCI and FFmpeg datasets. For Grand, a specific
+combination of Ebp and Mbp models is named in the form of “Grand (EBP+MBP)”.† indicates a statistically significant
+improvement (paired t-test with p-value≤ 0.05) over the corresponding baseline Ebp model (i.e., trained with the ranking loss
+only). %𝐼𝑚𝑝𝑟𝑜𝑣. is the relative improvement over the corresponding baseline Ebp model.
+Mo
+del Type Model Name AIDS CCI FFmpeg
+NDCG@5 Re
+call@5 NDCG@20 Recall@20 NDCG@20 Recall@20
+Mbp GMN 0.5312
+0.5907 0 .1772 0 .3322 0 .3552 0 .4463
+GraphSim 0.5201 0 .5638 0 .1791 0 .3379 0 .3818 0.4851
+Ebp
+GCN 0.4344
+0.4993 0 .1478 0 .2667 0 .2505 0 .2409
+Grand (GCN+GMN) 0.4926† 0.5665† 0.1659† 0.3023† 0.2876† 0.2793†
+%𝐼
+𝑚𝑝𝑟𝑜𝑣. 13.40 13.46 12.25 13.35 14.81 15.94
+Grand (GCN+GraphSim) 0.4939† 0.5705† 0.1677† 0.3050† 0.2821† 0.2717†
+%𝐼
+𝑚𝑝𝑟𝑜𝑣. 13.70 14.26 13.46 14.36 12.61 12.79
+GEM 0.5504
+0.5972 0 .1716 0 .3134 0 .3690 0 .3578
+Grand (GEM+GMN) 0.5674† 0.6327† 0.1864† 0.3416† 0.4258† 0.4178†
+%𝐼
+𝑚𝑝𝑟𝑜𝑣. 3.09 5.94 8.62 9.00 15.39 16.77
+Grand (GEM+GraphSim) 0.6324† 0.6980† 0.1889† 0.3473† 0.4253† 0.4177†
+%𝐼
+𝑚𝑝𝑟𝑜𝑣. 14.90 16.88 10.08 10.82 15.26 16.74
+Table 3: Retrieval quality of our Grand in comparison with
+state-of-the-art knowledge distillation methods EGSC and
+CPF customized for GNN. GCN+ and GEM+ indicates the
+different model combinations.
+(a) Results in terms of Recall@5 on dataset AIDS.
+Mo
+dels Combine GCN+ GEM+
+GMN
+GraphSim GMN GraphSim
+EGSC 0.5627
+0.5379 0 .6030 0 .6376
+CPF 0.4684 0 .4933 0 .6044 0 .6156
+Grand 0.5665
+0.5705 0 .6327 0 .6980
+(b) Results in terms of Recall@20 on dataset CCI.
+Metho
+ds Combine GCN+ GEM+
+GMN
+GraphSim GMN GraphSim
+EGSC 0.2909
+0.2852 0 .3323 0 .3231
+CPF 0.2705 0 .2734 0 .3252 0 .3233
+Grand 0.3023
+0.3050 0 .3416 0 .3473
+(c) Results in terms of Recall@20 on dataset FFmpeg.
+Metho
+ds Combine GCN+ GEM+
+GMN
+GraphSim GMN GraphSim
+EGSC 0.2781
+0.2653 0 .4039 0 .3898
+CPF 0.2447 0 .2510 0 .4115 0 .4155
+Grand 0.2793
+0.2717 0 .4178 0 .4177
+even surprisingly superior to that of the corresponding standalone-
+trained Mbp models (i.e., GMN and GraphSim). The reason could
+be that the Ebp models can achieve better learning efficiency under
+the supervision of both the ground-truth information and Mbp
+models. Thus, the Ebp models with a small performance gap to
+the Mbp models (i.e., GEM on AIDS and CCI datasets) potentially
+have the opportunity to outperform their teacher models due to a
+more effective and efficient learning process. In addition, for the
+mutual two-way KD, we hypothesize that another reason is that
+the mutual two-way KD in Grand also boosts the performance
+of the teacher models (i.e., Mbp). Thus, we further compare the
+performance of the standalone-trained Mbp models and the Mbp
+models trained under our Grand. Specifically, we use GEM as the
+Ebp model, and conduct experiments on AIDS, CCI, and FFmpeg
+datasets, where the performance of Grand is higher than that of
+the corresponding standalone-trained Mbp models. The experimen-
+tal results in Table 4 confirm our hypothesis. By jointly analyzing
+Tables 2 and 4, we find that the Ebp and Mbp models mutually
+trained under our Grand show similar performance, which is due
+to the mutual score-level KD. Additionally considering that Grand
+already significantly outperforms the standalone-trained Ebp and
+Mbp models, we do not compare with a baseline that applies Ebp
+and Mbp in the filtering-and-verification framework (i.e., using Ebp
+in the filtering phase and Mbp in the verification phase).
+5.3 Time Analysis (RQ3)
+In this subsection, we examine the efficiency of our proposed
+Grand. Table 5 reports the average retrieval time over all test
+graphs, where we omit the results on the AIDS dataset since it only
+contains hundreds of graphs. We see that the two Mbp models (i.e.,
+GMN and GraphSim) take a few or tens of seconds to complete
+the retrieval for a single query in a graph database consisting of
+tens of thousands or hundreds of thousands of graphs, which is
+unacceptable in scenarios where real-time response is critical. In ad-
+dition, since GMN involves multiple stacking layers of cross-graph
+node-wise attention calculation, it requires more computational
+overhead and a much longer retrieval time than GraphSim. On the
+other hand, we observe that the retrieval process of the Ebp models
+1646\nGrand: A Fast and Accurate Graph Retrieval Framework via Knowledge Distillation SIGIR ’24, July 14–18, 2024, Washington, DC, USA
+Table 4: Performance comparison of the standalone-trained
+Mbp models (denoted with the suffix “-S”) and the Mbp mod-
+els trained under our Grand with GEM as Ebp (denoted with
+the suffix “-G”).† indicates a statistically significant improve-
+ment (paired t-test with p-value 0.05).
+Mo
+del AIDS CCI
+NDCG@5 Re
+call@5 NDCG@20 Recall@20
+GMN-S 0.5312
+0.5907 0 .1772 0 .3322
+GMN-G 0.5906† 0.6483† 0.1877† 0.3452†
+GraphSim-S 0.5201
+0.5638 0 .1791 0 .3379
+GraphSim-G 0.6355† 0.7059† 0.1892† 0.3481†
+Table 5: Retrieval time per query (ms).
+Dataset GMN
+GraphSim GCN Grand-GCN GEM Grand-GEM
+CCI 93, 300
+8, 600 12 12 25 25
+FFmpeg 31, 300 7 , 700 8 8 21 21
+is fast and can finish in milliseconds. The reason is that for the Ebp
+models, we can compute the graph representations of candidate
+graphs in advance, and we only need to do the feed-forward calcu-
+lation once to obtain the graph representation of the query graph
+and then perform a similarity search in the latent vector space. In
+addition, since our Grand only modifies the training procedure and
+makes no change to the internals of Ebp, it has the same retrieval
+time as the corresponding Ebp models.
+5.4 Ablation Study (RQ4)
+5.4.1 Different Levels of Knowledge Transfer. We conduct extensive
+ablation studies to gain deeper insights into our design choices of
+Grand. Specifically, to investigate the contributions of different lev-
+els of knowledge transfer, we consider the following three variants:
+(1) Grand-OnlyScore performs knowledge transfer only with the
+score-level KD (i.e., 𝛽 = 𝛾 = 0 in Eqs. (17) and (18)); (2) Grand-
+NoNode performs knowledge transfer without the node-level KD
+(i.e.,𝛽 = 0 in Eqs. (17) and (18)); (3) Grand-NoSubgraph performs
+knowledge transfer without the subgraph-level KD (i.e.,𝛾 = 0 in
+Eqs. (17) and (18)).
+Table 6 summarizes the results on AIDS, CCI, and FFmpeg datasets.
+We observe that the performance improvement of Grand mainly
+benefits from the score-level KD, which is expected since the final
+predicted similarity scores contain the most essential and infor-
+mative knowledge for retrieval. In addition, the node-level and
+subgraph-level KD can further enhance the retrieval performance,
+which indicates that the intermediate node-wise and subgraph-wise
+similarity across graphs is also useful for knowledge transfer. We
+also find that the subgraph-level KD results in slight performance
+degradation in some cases when GCN is used as the Ebp model,
+which could be due to the low discriminative power of subgraph
+representations learned by GCN.
+5.4.2 One-Way KD Versus Mutual Two-Way KD. In this part, we
+compare the performance of one-way KD and mutual two-way KD
+during optimization. From Table 6, we observe that GEM performs
+Table 6: Ablation results w.r.t. different levels of KD(DML
+indicates Mutual KD and KD indicates one Way KD).
+(a) Results in terms of Recall@5 on dataset AIDS.
+AIDS GCN+GraphSim
+GEM+GraphSim
+DML
+KD DML KD
+Grand 0.5705 0.5982 0.6980
+0.6733
+Grand
+-OnlyScore 0.5298 0 .5328 0 .6763 0 .6354
+Grand-NoNode 0.5392 0 .5223 0 .6827 0 .6522
+Grand-NoSubgraph 0.5552 0.6030 0.6908 0 .6719
+(b) Results in terms of Recall@20 on dataset CCI.
+CCI GCN+GraphSim
+GEM+GraphSim
+DML
+KD DML KD
+Grand 0.3050
+0.3252 0 .3473 0 .3489
+Grand
+-OnlyScore 0.2969 0 .2907 0 .3420 0 .3393
+Grand-NoNode 0.2987 0 .3013 0 .3445 0 .3362
+Grand-NoSubgraph 0.3009 0 .3231 0 .3435 0 .3484
+(c) Results in terms of Recall@20 on dataset FFmpeg.
+FFmp
+eg GCN+GraphSim GEM+GraphSim
+DML
+KD DML KD
+Grand 0.2717 0.3047
+0.4177 0 .3994
+Grand
+-OnlyScore 0.2732 0 .2509 0 .4081 0 .3898
+Grand-NoNode 0.2731 0 .2532 0 .4151 0 .3734
+Grand-NoSubgraph 0.2741 0.3045 0 .4138 0 .3921
+better in mutual two-way knowledge distillation, while GCN is
+opposite. By jointly considering the results in Table 4, we further
+confirm that Ebp and Mbp can complement and benefit each other.
+In addition, we see that the relative performance improvement of
+GEM is greater than that of GCN, and we suggest that the reason
+is that GEM has stronger learning ability than GCN and thus is
+able to contribute more to as well as benefit more from the mutual
+two-way KD.
+6 CONCLUSION
+To combine the advantage of Ebp in retrieval efficiency with that
+of Mbp in retrieval accuracy, this paper presents a novel graph re-
+trieval framework Grand that bridges Ebp and Mbp via knowledge
+distillation. Specifically, our Grand performs knowledge transfer
+from three perspectives: score-level, node-level, and subgraph-level
+KD. Furthermore, in addition to the vanilla one-way KD from Mbp
+to Ebp, our Grand also proposes to apply mutual two-way KD
+between Ebp and Mbp enabling Ebp and Mbp to complement and
+benefit each other during optimization. Extensive experiments on
+three real-world datasets demonstrate the superiority of ourGrand.
+ACKNOWLEDGMENTS
+The authors would like to thank the anonymous reviewers for
+their comments and suggestions. This work was supported by the
+National Natural Science Foundation of China (U22B2019, 62272372,
+62272379).
+1647\nSIGIR ’24, July 14–18, 2024, Washington, DC, USA Lin Lan et al.
+REFERENCES
+[1] Yunsheng Bai, Hao Ding, Song Bian, Ting Chen, Yizhou Sun, and Wei Wang.
+2019. Simgnn: A neural network approach to fast graph similarity computation.
+In WSDM.
+[2] Yunsheng Bai, Hao Ding, Ken Gu, Yizhou Sun, and Wei Wang. 2020. Learning-
+based efficient graph similarity computation via multi-scale convolutional set
+matching. In AAAI.
+[3] Horst Bunke and Kim Shearer. 1998. A graph distance metric based on the
+maximal common subgraph. Pattern recognition letters (1998).
+[4] Zhe Cao, Tao Qin, Tie-Yan Liu, Ming-Feng Tsai, and Hang Li. 2007. Learning to
+rank: from pairwise approach to listwise approach. In ICML.
+[5] Xiaoyang Chen, Hongwei Huo, Jun Huan, and Jeffrey Scott Vitter. 2019. An
+efficient algorithm for graph edit distance computation.Knowledge-Based Systems
+(2019).
+[6] Zhengdao Chen, Lei Chen, Soledad Villar, and Joan Bruna. 2020. Can graph
+neural networks count substructures?. In NeurIPS.
+[7] Tyler Derr, Hamid Karimi, Xiaorui Liu, Jiejun Xu, and Jiliang Tang. 2021. Deep
+adversarial network alignment. In CIKM.
+[8] Matthias Fey, Jan E Lenssen, Christopher Morris, Jonathan Masci, and Nils M
+Kriege. 2020. Deep Graph Matching Consensus. In ICLR.
+[9] Justin Gilmer, Samuel S Schoenholz, Patrick F Riley, Oriol Vinyals, and George E
+Dahl. 2017. Neural message passing for quantum chemistry. In ICML.
+[10] Kunal Goyal, Utkarsh Gupta, Abir De, and Soumen Chakrabarti. 2020. Deep
+Neural Matching Models for Graph Retrieval. In SIGIR.
+[11] William L Hamilton, Rex Ying, and Jure Leskovec. 2017. Inductive representation
+learning on large graphs. In NIPS.
+[12] Peter E Hart, Nils J Nilsson, and Bertram Raphael. 1968. A formal basis for the
+heuristic determination of minimum cost paths. IEEE transactions on Systems
+Science and Cybernetics (1968).
+[13] Mark Heimann, Haoming Shen, Tara Safavi, and Danai Koutra. 2018. Regal:
+Representation learning-based graph alignment. In CIKM.
+[14] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. 2015. Distilling the knowledge in
+a neural network. arXiv preprint arXiv:1503.02531 (2015).
+[15] Elad Hoffer and Nir Ailon. 2015. Deep metric learning using triplet network. In
+SIMBAD. Springer.
+[16] Jui-Ting Huang, Ashish Sharma, Shuying Sun, Li Xia, David Zhang, Philip Pronin,
+Janani Padmanabhan, Giuseppe Ottaviano, and Linjun Yang. 2020. Embedding-
+based retrieval in facebook search. In KDD.
+[17] Jeff Johnson, Matthijs Douze, and Hervé Jégou. 2019. Billion-scale similarity
+search with gpus. IEEE Transactions on Big Data (2019).
+[18] George Karypis and Vipin Kumar. 1998. A fast and high quality multilevel scheme
+for partitioning irregular graphs. SIAM Journal on scientific Computing (1998).
+[19] Jongik Kim, Dong-Hoon Choi, and Chen Li. 2019. Inves: Incremental Partitioning-
+Based Verification for Graph Similarity Search.. In EDBT.
+[20] Thomas N Kipf and Max Welling. 2017. Semi-supervised classification with graph
+convolutional networks. In ICLR.
+[21] Yujia Li, Chenjie Gu, Thomas Dullien, Oriol Vinyals, and Pushmeet Kohli. 2019.
+Graph matching networks for learning the similarity of graph structured objects.
+In ICML.
+[22] Yongjiang Liang and Peixiang Zhao. 2017. Similarity search in graph databases:
+A multi-layered indexing approach. In ICDE.
+[23] Xiang Ling, Lingfei Wu, Saizhuo Wang, Tengfei Ma, Fangli Xu, Alex X Liu,
+Chunming Wu, and Shouling Ji. 2021. Multilevel Graph Matching Networks for
+Deep Graph Similarity Learning. TNNLS (2021).
+[24] Xiang Ling, Lingfei Wu, Saizhuo Wang, Gaoning Pan, Tengfei Ma, Fangli Xu,
+Alex X Liu, Chunming Wu, and Shouling Ji. 2021. Deep Graph Matching and
+Searching for Semantic Code Retrieval. TKDD (2021).
+[25] Xin Liu, Haojie Pan, Mutian He, Yangqiu Song, Xin Jiang, and Lifeng Shang. 2020.
+Neural subgraph isomorphism counting. In KDD.
+[26] Michel Neuhaus and Horst Bunke. 2007. Bridging the gap between graph edit
+distance and kernel machines. World Scientific.
+[27] Ferran Parés, Dario Garcia Gasulla, Armand Vilalta, Jonatan Moreno, Eduard
+Ayguadé, Jesús Labarta, Ulises Cortés, and Toyotaro Suzumura. 2017. Fluid
+communities: A competitive, scalable and diverse community detection algorithm.
+In Complex Networks & Their Applications.
+[28] Can Qin, Handong Zhao, Lichen Wang, Huan Wang, Yulun Zhang, and Yun Fu.
+2021. Slow learning and fast inference: Efficient graph similarity computation
+via knowledge distillation. Advances in Neural Information Processing Systems 34
+(2021), 14110–14121.
+[29] Zongyue Qin, Yunsheng Bai, and Yizhou Sun. 2020. GHashing: Semantic Graph
+Hashing for Approximate Similarity Search in Graph Databases. In KDD.
+[30] Sayan Ranu, Minh Hoang, and Ambuj Singh. 2014. Answering top-k representa-
+tive queries on graph databases. In SIGMOD.
+[31] Haichuan Shang, Xuemin Lin, Ying Zhang, Jeffrey Xu Yu, and Wei Wang. 2010.
+Connected substructure similarity search. In SIGMOD.
+[32] Damian Szklarczyk, Alberto Santos, Christian Von Mering, Lars Juhl Jensen,
+Peer Bork, and Michael Kuhn. 2016. STITCH 5: augmenting protein–chemical
+interaction networks with tissue and affinity data. Nucleic acids research (2016).
+[33] Michael Taylor, John Guiver, Stephen Robertson, and Tom Minka. 2008. Softrank:
+optimizing non-smooth rank metrics. In WSDM.
+[34] Yuanyuan Tian, Richard C Mceachin, Carlos Santos, David J States, and Jignesh M
+Patel. 2007. SAGA: a subgraph matching tool for biological graphs.Bioinformatics
+(2007).
+[35] Esko Ukkonen. 1992. Approximate string-matching with q-grams and maximal
+matches. Theoretical computer science (1992).
+[36] Petar Veličković, Guillem Cucurull, Arantxa Casanova, Adriana Romero, Pietro
+Lio, and Yoshua Bengio. 2018. Graph attention networks. In ICLR.
+[37] Guoren Wang, Bin Wang, Xiaochun Yang, and Ge Yu. 2010. Efficiently indexing
+large sparse graphs for similarity search. TKDE (2010).
+[38] Fen Xia, Tie-Yan Liu, Jue Wang, Wensheng Zhang, and Hang Li. 2008. Listwise
+approach to learning to rank: theory and algorithm. In ICML.
+[39] Keyulu Xu, Weihua Hu, Jure Leskovec, and Stefanie Jegelka. 2019. How powerful
+are graph neural networks?. In ICLR.
+[40] Xifeng Yan, Philip S Yu, and Jiawei Han. 2005. Substructure similarity search in
+graph databases. In SIGMOD.
+[41] Cheng Yang, Jiawei Liu, and Chuan Shi. 2021. Extract the knowledge of graph
+neural networks and go beyond it: An effective knowledge distillation framework.
+In Proceedings of the web conference 2021. 1227–1237.
+[42] Zhitao Ying, Andrew Wang, Jiaxuan You, Chengtao Wen, Arquimedes Canedo,
+and Jure Leskovec. 2020. Neural subgraph matching. arXiv preprint
+arXiv:2007.03092 (2020).
+[43] Ye Yuan, Guoren Wang, Jeffery Yu Xu, and Lei Chen. 2015. Efficient distributed
+subgraph similarity matching. The VLDB Journal (2015).
+[44] Zhiping Zeng, Anthony KH Tung, Jianyong Wang, Jianhua Feng, and Lizhu Zhou.
+2009. Comparing stars: On approximating graph edit distance. In VLDB.
+[45] Shijie Zhang, Jiong Yang, and Wei Jin. 2010. Sapper: Subgraph indexing and
+approximate matching in large graphs. In VLDB.
+[46] Ying Zhang, Tao Xiang, Timothy M Hospedales, and Huchuan Lu. 2018. Deep
+mutual learning. In CVPR.
+[47] Zhen Zhang, Jiajun Bu, Martin Ester, Zhao Li, Chengwei Yao, Zhi Yu, and Can
+Wang. 2021. H2MN: Graph Similarity Learning with Hierarchical Hypergraph
+Matching Networks. In KDD.
+[48] Xiang Zhao, Chuan Xiao, Xuemin Lin, Qing Liu, and Wenjie Zhang. 2013. A
+partition-based approach to structure similarity search. In VLDB.
+[49] Xiang Zhao, Chuan Xiao, Xuemin Lin, Wei Wang, and Yoshiharu Ishikawa. 2013.
+Efficient processing of graph similarity queries with edit distance constraints.
+The VLDB Journal (2013).
+[50] Gaoping Zhu, Xuemin Lin, Ke Zhu, Wenjie Zhang, and Jeffrey Xu Yu. 2012.
+TreeSpan: efficiently computing similarity all-matching. In SIGMOD.
+1648

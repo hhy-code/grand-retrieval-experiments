@@ -66,6 +66,24 @@ representations. Ebp scores graph pairs with the negative squared Euclidean
 distance specified by GRAND Equation 5. GraphSim reuses the same GEM node
 encoder as required by GRAND Section 5.1.3.
 
+For the AIDS GraphSim adaptation, the final three GEM propagation states are
+stacked as a three-channel node-similarity tensor, padded to the dataset's
+maximum of 10 nodes, and passed through five convolutional layers with
+progressively wider channels and intermediate pooling, followed by a
+five-linear-layer MLP. The paper specifies the 5+5 depth but does not publish
+the complete GraphSim kernel and pooling details; these choices are explicit in
+`grand/models.py` and the configuration.
+
+The GraphSim configurations enable `graphsim_ordering: bfs`. This follows the
+optional stable BFS ordering implemented by the reference GraphSim repository:
+the highest-degree node is used as the start node, and each frontier is sorted
+by atom type and node index. The permutation is applied only while constructing
+the GraphSim matching tensor; node states returned for GRAND distillation are
+restored to the original indexing. Set this option to `null` for the
+non-ordered ablation. GRAND does not explicitly state whether BFS ordering was
+used in its AIDS experiment, so this setting is recorded as an implementation
+choice rather than a paper-confirmed fact.
+
 GRAND does not explicitly state whether AIDS bond valence is passed to GEM.
 This implementation uses it because the reference GEM encoder accepts edge
 features and the supplied AIDS graphs contain complete valence labels. The
@@ -92,6 +110,7 @@ python train GRAND-GCN-GMN AIDS
 python train GRAND-GCN-GraphSim AIDS
 python train GRAND-GEM-GMN AIDS
 python train GRAND-GEM-GraphSim AIDS
+python train --config configs/aids_grand_gem_graphsim_a075_b01_g01.yaml
 ```
 
 Each command trains with its YAML configuration, restores the best Ebp or Mbp

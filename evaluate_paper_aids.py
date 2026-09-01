@@ -38,7 +38,7 @@ def main():
     queries = list(positives)
     settings = config["model"]
     name = settings["student"] if args.mode == "ebp" else settings["teacher"]
-    model = build_model(name, settings["input_dim"], settings["hidden_dim"], settings["layers"], settings["dropout"], settings["graphsim_cnn_layers"], settings["graphsim_mlp_layers"], settings.get("gem")).to(device)
+    model = build_model(name, settings["input_dim"], settings["hidden_dim"], settings["layers"], settings["dropout"], settings["graphsim_cnn_layers"], settings["graphsim_mlp_layers"], settings.get("gem"), settings.get("graphsim_max_nodes", 10), settings.get("graphsim_scales", 3), settings.get("graphsim_ordering")).to(device)
     model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True))
     model.eval()
     rankings, times = [], []

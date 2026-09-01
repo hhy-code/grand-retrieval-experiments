@@ -27,13 +27,13 @@ training:
   validation_seed: 900042
   early_stopping_patience: 10
 distillation:
-  alpha: 0.5
+  alpha: 0.75
   score: true
   node: true
   subgraph: true
   bidirectional: true
-  beta: 0.1
-  gamma: 0.1
+  beta: 0.01
+  gamma: 0.01
   temperature: 2.0
   node_temperature: 2.0
   subgraph_temperature: 2.0

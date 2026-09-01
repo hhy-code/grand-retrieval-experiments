@@ -1,5 +1,6 @@
 experiment:
-  name: aids_grand_gcn_graphsim
+  # Dedicated validation run: keep the established baseline YAML unchanged.
+  name: aids_grand_gem_graphsim_a075_b01_g01
   seed: 42
   mode: grand
 data:
@@ -9,7 +10,7 @@ evaluation:
   recall_k: 5
   ndcg_k: 5
 model:
-  student: gcn
+  student: gem
   teacher: graphsim
   input_dim: 29
   hidden_dim: 128
@@ -42,8 +43,8 @@ distillation:
   node: true
   subgraph: true
   bidirectional: true
-  beta: 0.01
-  gamma: 0.01
+  beta: 0.1
+  gamma: 0.1
   temperature: 2.0
   node_temperature: 2.0
   subgraph_temperature: 2.0

@@ -161,7 +161,10 @@ def main():
             graph["subgraph_groups"] = fluidc_partition(graph["edge_index"], graph["x"].shape[0])
     model = config["model"]
     gem_config = model.get("gem")
-    student = build_model(model["student"], model["input_dim"], model["hidden_dim"], model["layers"], model["dropout"], model["graphsim_cnn_layers"], model["graphsim_mlp_layers"], gem_config).to(device)
+    graphsim_max_nodes = model.get("graphsim_max_nodes", 10)
+    graphsim_scales = model.get("graphsim_scales", 3)
+    graphsim_ordering = model.get("graphsim_ordering")
+    student = build_model(model["student"], model["input_dim"], model["hidden_dim"], model["layers"], model["dropout"], model["graphsim_cnn_layers"], model["graphsim_mlp_layers"], gem_config, graphsim_max_nodes, graphsim_scales, graphsim_ordering).to(device)
     output = Path(args.output) if args.output else default_output_dir(config["experiment"]["name"])
     output.mkdir(parents=True, exist_ok=True)
     (output / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
@@ -175,7 +178,7 @@ def main():
         train_baseline(student, graphs, bundle, device, train, seed, output)
         return
 
-    teacher = build_model(model["teacher"], model["input_dim"], model["hidden_dim"], model["layers"], model["dropout"], model["graphsim_cnn_layers"], model["graphsim_mlp_layers"], gem_config).to(device)
+    teacher = build_model(model["teacher"], model["input_dim"], model["hidden_dim"], model["layers"], model["dropout"], model["graphsim_cnn_layers"], model["graphsim_mlp_layers"], gem_config, graphsim_max_nodes, graphsim_scales, graphsim_ordering).to(device)
     kd = distillation
     teacher_optimizer = torch.optim.Adam(teacher.parameters(), lr=train["learning_rate"])
     student_optimizer = torch.optim.Adam(student.parameters(), lr=train["learning_rate"])

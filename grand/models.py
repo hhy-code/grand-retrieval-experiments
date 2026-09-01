@@ -79,6 +79,67 @@ def _undirected_edges(edge_index, edge_features):
     return pairs.t().contiguous(), merged_features
 
 
+def _graphsim_bfs_order(graph):
+    """Return the stable BFS permutation used by the reference GraphSim code.
+
+    The reference implementation starts at the highest-degree node (ties are
+    broken by node type and then node id), and sorts each BFS frontier by node
+    type and id.  AIDS node features are one-hot atom types, so ``argmax`` is
+    the corresponding deterministic type key here.
+    """
+    node_count = int(graph["x"].shape[0])
+    if node_count <= 1:
+        return torch.arange(node_count, device=graph["x"].device), torch.arange(node_count, device=graph["x"].device)
+    edge_index = graph["edge_index"].detach().cpu()
+    neighbors = [[] for _ in range(node_count)]
+    for source, target in edge_index.t().tolist():
+        source, target = int(source), int(target)
+        if 0 <= source < node_count and 0 <= target < node_count and source != target:
+            neighbors[source].append(target)
+            neighbors[target].append(source)
+    node_types = graph["x"].detach().argmax(dim=1).cpu().tolist()
+    degree = [len(set(items)) for items in neighbors]
+    key = lambda node: (-degree[node], node_types[node], node)
+    start = min(range(node_count), key=key)
+    order, seen = [], {start}
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        order.append(current)
+        frontier = sorted((node for node in set(neighbors[current]) if node not in seen), key=lambda node: (node_types[node], node))
+        seen.update(frontier)
+        queue.extend(frontier)
+    # The reference data are connected; append disconnected components
+    # deterministically instead of failing on an unexpected input graph.
+    for component_start in sorted((node for node in range(node_count) if node not in seen), key=key):
+        seen.add(component_start)
+        queue = [component_start]
+        while queue:
+            current = queue.pop(0)
+            order.append(current)
+            frontier = sorted((node for node in set(neighbors[current]) if node not in seen), key=lambda node: (node_types[node], node))
+            seen.update(frontier)
+            queue.extend(frontier)
+    permutation = torch.tensor(order, dtype=torch.long, device=graph["x"].device)
+    inverse = torch.empty_like(permutation)
+    inverse[permutation] = torch.arange(node_count, device=permutation.device)
+    return permutation, inverse
+
+
+def _reorder_graph(graph, permutation):
+    """Reindex node and edge tensors without mutating the dataset bundle."""
+    node_count = graph["x"].shape[0]
+    inverse = torch.empty_like(permutation)
+    inverse[permutation] = torch.arange(node_count, device=permutation.device)
+    edge_index = inverse[graph["edge_index"]]
+    return {
+        "id": graph.get("id"),
+        "x": graph["x"][permutation],
+        "edge_index": edge_index,
+        "edge_attr": graph["edge_attr"],
+    }
+
+
 class GEMFeatureEncoder(nn.Module):
     """Project raw node and edge features to GEM's recommended state sizes."""
 
@@ -152,7 +213,8 @@ class GEMEncoder(nn.Module):
         self.aggregator = GEMGraphAggregator(self.node_state_dim, config["graph_rep_dim"])
         self.dropout = dropout
 
-    def forward(self, graph):
+    def encode_layers(self, graph):
+        """Return every GEM node state plus the final graph representation."""
         edge_features = graph.get("edge_attr")
         if edge_features is None:
             raise ValueError("GEM requires edge_attr; rebuild the AIDS bundle with scripts/prepare_aids.py")
@@ -168,10 +230,16 @@ class GEMEncoder(nn.Module):
             )
         edge_index, edge_features = _undirected_edges(graph["edge_index"], edge_features)
         nodes, edge_features = self.feature_encoder(graph["x"], edge_features)
+        layer_outputs = [nodes]
         for _ in range(self.propagation_steps):
             nodes = self.propagation(nodes, edge_index, edge_features)
             nodes = F.dropout(nodes, self.dropout, self.training)
-        return nodes, self.aggregator(nodes)
+            layer_outputs.append(nodes)
+        return layer_outputs, self.aggregator(nodes)
+
+    def forward(self, graph):
+        layer_outputs, embedding = self.encode_layers(graph)
+        return layer_outputs[-1], embedding
 
 
 class Ebp(nn.Module):
@@ -222,32 +290,108 @@ class GMN(nn.Module):
 
 
 class GraphSim(nn.Module):
-    """GEM node encoder plus five CNN/five MLP layers for AIDS."""
+    """GEM multi-scale node matching head for the AIDS experiment."""
 
-    def __init__(self, input_dim, hidden_dim, layers, dropout, cnn_layers=5, mlp_layers=5, gem_config=None):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        layers,
+        dropout,
+        cnn_layers=5,
+        mlp_layers=5,
+        gem_config=None,
+        max_nodes=10,
+        scales=3,
+        ordering=None,
+    ):
         super().__init__()
+        if cnn_layers <= 0 or mlp_layers <= 0 or max_nodes <= 0 or scales <= 0:
+            raise ValueError("GraphSim layer counts, max_nodes, and scales must be positive")
+        if ordering not in (None, "bfs"):
+            raise ValueError("GraphSim ordering must be None or 'bfs'")
         self.encoder = GEMEncoder(input_dim, gem_config, dropout)
-        channels = [1] + [32] * cnn_layers
-        self.cnn = nn.ModuleList([nn.Conv2d(channels[i], channels[i + 1], kernel_size=3, padding=1) for i in range(cnn_layers)])
+        self.max_nodes = max_nodes
+        self.scales = scales
+        self.ordering = ordering
+        self._ordering_cache = {}
+        channel_schedule = [16, 32, 64, 128, 128]
+        if cnn_layers > len(channel_schedule):
+            channel_schedule.extend([channel_schedule[-1]] * (cnn_layers - len(channel_schedule)))
+        channels = [scales] + channel_schedule[:cnn_layers]
+        self.cnn = nn.ModuleList(
+            [nn.Conv2d(channels[i], channels[i + 1], kernel_size=3, padding=1) for i in range(cnn_layers)]
+        )
+        self.pool = nn.ModuleList(
+            [nn.MaxPool2d(2, stride=2, ceil_mode=True) if i < min(3, cnn_layers) else nn.Identity() for i in range(cnn_layers)]
+        )
         mlp = []
         for index in range(mlp_layers):
             output_dim = 1 if index == mlp_layers - 1 else hidden_dim
-            mlp.append(nn.Linear(32 if index == 0 else hidden_dim, output_dim))
+            mlp.append(nn.Linear(channels[-1] if index == 0 else hidden_dim, output_dim))
             if index != mlp_layers - 1:
                 mlp.append(nn.ReLU())
         self.mlp = nn.Sequential(*mlp)
 
+    def _pad_similarity(self, left_nodes, right_nodes):
+        if left_nodes.shape[0] > self.max_nodes or right_nodes.shape[0] > self.max_nodes:
+            raise ValueError("GraphSim received a graph larger than max_nodes={}".format(self.max_nodes))
+        matrix = left_nodes.new_zeros((self.max_nodes, self.max_nodes))
+        matrix[: left_nodes.shape[0], : right_nodes.shape[0]] = left_nodes @ right_nodes.t()
+        return matrix
+
     def score_pair(self, left, right):
-        left_nodes, _ = self.encoder(left)
-        right_nodes, _ = self.encoder(right)
-        matrix = (left_nodes @ right_nodes.t()).unsqueeze(0).unsqueeze(0)
-        for layer in self.cnn:
+        left_permutation = right_permutation = None
+        if self.ordering == "bfs":
+            left_permutation = self._cached_order(left)
+            right_permutation = self._cached_order(right)
+            left = _reorder_graph(left, left_permutation)
+            right = _reorder_graph(right, right_permutation)
+        left_layers, _ = self.encoder.encode_layers(left)
+        right_layers, _ = self.encoder.encode_layers(right)
+        left_nodes, right_nodes = left_layers[-1], right_layers[-1]
+        if len(left_layers) < self.scales or len(right_layers) < self.scales:
+            raise ValueError("GraphSim scales exceed available GEM propagation layers")
+        matrices = [
+            self._pad_similarity(left_layer, right_layer)
+            for left_layer, right_layer in zip(left_layers[-self.scales :], right_layers[-self.scales :])
+        ]
+        matrix = torch.stack(matrices, dim=0).unsqueeze(0)
+        for layer, pool in zip(self.cnn, self.pool):
             matrix = F.relu(layer(matrix))
+            matrix = pool(matrix)
         vector = F.adaptive_max_pool2d(matrix, (1, 1)).flatten(1).squeeze(0)
+        if self.ordering == "bfs":
+            left_nodes = left_nodes[torch.argsort(left_permutation)]
+            right_nodes = right_nodes[torch.argsort(right_permutation)]
         return self.mlp(vector).squeeze(-1), (left_nodes, right_nodes)
 
+    def _cached_order(self, graph):
+        key = graph.get("id")
+        if key is None:
+            key = (id(graph), graph["x"].shape[0])
+        device_key = str(graph["x"].device)
+        cache_key = (int(key) if isinstance(key, (int,)) else key, device_key)
+        permutation = self._ordering_cache.get(cache_key)
+        if permutation is None:
+            permutation, _ = _graphsim_bfs_order(graph)
+            self._ordering_cache[cache_key] = permutation
+        return permutation
 
-def build_model(name, input_dim, hidden_dim=128, layers=3, dropout=0.0, cnn_layers=5, mlp_layers=5, gem_config=None):
+
+def build_model(
+    name,
+    input_dim,
+    hidden_dim=128,
+    layers=3,
+    dropout=0.0,
+    cnn_layers=5,
+    mlp_layers=5,
+    gem_config=None,
+    graphsim_max_nodes=10,
+    graphsim_scales=3,
+    graphsim_ordering=None,
+):
     """Build one architecture named in the GRAND experimental configurations."""
     name = name.lower()
     if name == "gcn":
@@ -257,5 +401,16 @@ def build_model(name, input_dim, hidden_dim=128, layers=3, dropout=0.0, cnn_laye
     if name == "gmn":
         return GMN(input_dim, hidden_dim, layers, dropout)
     if name == "graphsim":
-        return GraphSim(input_dim, hidden_dim, layers, dropout, cnn_layers, mlp_layers, gem_config)
+        return GraphSim(
+            input_dim,
+            hidden_dim,
+            layers,
+            dropout,
+            cnn_layers,
+            mlp_layers,
+            gem_config,
+            graphsim_max_nodes,
+            graphsim_scales,
+            graphsim_ordering,
+        )
     raise ValueError("Unknown paper model: {}".format(name))
