@@ -110,8 +110,27 @@ python train GRAND-GCN-GMN AIDS
 python train GRAND-GCN-GraphSim AIDS
 python train GRAND-GEM-GMN AIDS
 python train GRAND-GEM-GraphSim AIDS
-python train --config configs/aids_grand_gem_graphsim_a075_b01_g01.yaml
 ```
+
+### GRAND hyperparameter validation
+
+These single-seed configurations keep the data split, validation triplets, BFS
+ordering, temperatures, and optimizer fixed. The first three compare `alpha`
+with `beta=gamma=0.1`; the final two isolate a smaller node- or subgraph-level
+weight.
+
+```powershell
+python train --config configs/aids_grand_gem_graphsim_a025_b01_g01.yaml
+python train --config configs/aids_grand_gem_graphsim_a050_b01_g01.yaml
+python train --config configs/aids_grand_gem_graphsim_a075_b01_g01.yaml已有结果
+python train --config configs/aids_grand_gem_graphsim_a075_b001_g01.yaml
+python train --config configs/aids_grand_gem_graphsim_a075_b01_g001.yaml
+```
+
+Suffixes encode the values: `a025` is `alpha=0.25`, `b01` is `beta=0.1`,
+and `g01` is `gamma=0.1`; `b001` and `g001` mean `0.01`. Choose the setting
+with the lowest `validation_loss` in its `history.json`; use its test
+`metrics_ebp.json` only for final reporting.
 
 Each command trains with its YAML configuration, restores the best Ebp or Mbp
 checkpoint selected on the validation split, and writes test metrics under

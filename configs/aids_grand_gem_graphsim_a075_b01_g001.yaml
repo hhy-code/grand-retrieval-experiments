@@ -1,0 +1,49 @@
+experiment:
+  name: aids_grand_gem_graphsim_a075_b01_g001
+  seed: 42
+  mode: grand
+data:
+  path: data/processed/aids700nef.pt
+evaluation:
+  mode: ebp
+  recall_k: 5
+  ndcg_k: 5
+model:
+  student: gem
+  teacher: graphsim
+  input_dim: 29
+  hidden_dim: 128
+  layers: 3
+  dropout: 0.0
+  graphsim_cnn_layers: 5
+  graphsim_mlp_layers: 5
+  graphsim_max_nodes: 10
+  graphsim_scales: 3
+  graphsim_ordering: bfs
+  gem:
+    node_state_dim: 32
+    edge_feature_dim: 3
+    edge_state_dim: 16
+    message_hidden_dim: 64
+    propagation_steps: 5
+    graph_rep_dim: 128
+training:
+  device: cuda
+  batch_size: 32
+  learning_rate: 0.001
+  iterations: 30000
+  validation_interval: 500
+  validation_samples: 320
+  validation_seed: 900042
+  early_stopping_patience: 10
+distillation:
+  alpha: 0.75
+  beta: 0.1
+  gamma: 0.01
+  score: true
+  node: true
+  subgraph: true
+  bidirectional: true
+  temperature: 2.0
+  node_temperature: 2.0
+  subgraph_temperature: 2.0
